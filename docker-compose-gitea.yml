@@ -51,6 +51,8 @@ services:
 
     networks:
       - gitea_data
+      - gitea_default
+      - gitea_monitoring
 
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gitea -d gitea"]
@@ -64,6 +66,9 @@ services:
       - "com.gitea.tier=data"
       - "com.cmmc.asset-category=SPA"
       - "com.cmmc.control=AC.L2-3.1.1,AU.L2-3.3.1"
+      - "com.devsecops.stack=gitea"
+      - "com.devsecops.category=database"
+      - "com.devsecops.tier=supporting"
 
     # Resource limits
     deploy:
@@ -191,6 +196,9 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.gitea.rule=Host(`${GITEA_DOMAIN:-localhost}`)"
       - "traefik.http.services.gitea.loadbalancer.server.port=10000"
+      - "com.devsecops.stack=gitea"
+      - "com.devsecops.category=git"
+      - "com.devsecops.tier=core"
 
     # Resource limits
     deploy:
@@ -233,6 +241,9 @@ services:
       - "com.gitea.tier=build"
       - "com.cmmc.asset-category=SPC"
       - "com.cmmc.control=SI.L2-3.14.1,CM.L2-3.4.2"
+      - "com.devsecops.stack=gitea"
+      - "com.devsecops.category=cicd"
+      - "com.devsecops.tier=core"
 
     # Resource limits
     deploy:
@@ -270,6 +281,9 @@ services:
       - "com.gitea.tier=edge"
       - "com.cmmc.asset-category=SPA"
       - "com.cmmc.control=SC.L2-3.13.8,SC.L2-3.13.11"
+      - "com.devsecops.stack=gitea"
+      - "com.devsecops.category=proxy"
+      - "com.devsecops.tier=supporting"
 
     # Only deploy if TLS is enabled
     profiles:
