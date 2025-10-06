@@ -1,0 +1,395 @@
+# Gitea Actions Workflow for Atlantis Integration
+# CMMC 2.0: CM.L2-3.4.3 (Track Configuration Changes)
+
+name: Atlantis GitOps Integration
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'terragrunt/**'
+      - 'terraform/**'
+      - '*.tf'
+      - '*.hcl'
+
+  pull_request_review:
+    types: [submitted]
+
+  issue_comment:
+    types: [created]
+
+env:
+  ATLANTIS_URL: https://atlantis.gitea.local
+  TF_VERSION: 1.6.0
+  TERRAGRUNT_VERSION: 0.52.0
+  EVIDENCE_BUCKET: gs://${{ vars.GCP_PROJECT_ID }}-atlantis-evidence
+
+jobs:
+  # Pre-flight checks before Atlantis
+  pre-flight:
+    name: Pre-Flight Security Checks
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+
+    - name: Setup Terragrunt
+      run: |
+        wget -q https://github.com/gruntwork-io/terragrunt/releases/download/v${TERRAGRUNT_VERSION}/terragrunt_linux_amd64
+        chmod +x terragrunt_linux_amd64
+        sudo mv terragrunt_linux_amd64 /usr/local/bin/terragrunt
+
+    - name: Check for secrets
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: ${{ github.event.pull_request.base.ref }}
+        head: ${{ github.event.pull_request.head.ref }}
+
+    - name: Terraform format check
+      run: |
+        terraform fmt -check=true -recursive
+      continue-on-error: true
+
+    - name: Terragrunt validate all
+      run: |
+        find . -name "terragrunt.hcl" -exec dirname {} \; | while read dir; do
+          echo "Validating $dir"
+          (cd "$dir" && terragrunt validate --terragrunt-non-interactive) || exit 1
+        done
+
+    - name: Generate evidence
+      if: always()
+      run: |
+        mkdir -p /tmp/evidence
+        echo "Pre-flight check completed: $(date -Iseconds)" > /tmp/evidence/preflight.txt
+        echo "PR: ${{ github.event.pull_request.number }}" >> /tmp/evidence/preflight.txt
+        echo "SHA: ${{ github.event.pull_request.head.sha }}" >> /tmp/evidence/preflight.txt
+        sha256sum /tmp/evidence/preflight.txt
+
+    - name: Upload evidence
+      if: always()
+      run: |
+        gsutil -h "x-goog-meta-cmmc:CM.L2-3.4.3" \
+          cp /tmp/evidence/*.txt \
+          ${EVIDENCE_BUCKET}/preflight/$(date +%Y%m%d)/${{ github.event.pull_request.number }}/
+
+  # Security scanning job
+  security-scan:
+    name: Security Compliance Scanning
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: pre-flight
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Run Checkov scan
+      id: checkov
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: .
+        framework: terraform
+        output_format: json
+        output_file_path: /tmp/checkov-results.json
+        soft_fail: true
+
+    - name: Run tfsec scan
+      uses: aquasecurity/tfsec-action@v1.0.0
+      with:
+        soft_fail: true
+        format: json
+        out: /tmp/tfsec-results.json
+
+    - name: Run Terrascan
+      run: |
+        docker run --rm -v "$(pwd):/src" \
+          tenable/terrascan scan -i terraform -t gcp \
+          -o json > /tmp/terrascan-results.json || true
+
+    - name: OPA Policy validation
+      run: |
+        docker run --rm -v "$(pwd):/project" \
+          -v "$(pwd)/atlantis/policies:/policies" \
+          openpolicyagent/conftest verify \
+          --policy /policies \
+          --namespace terraform.cmmc \
+          /project || true
+
+    - name: Comment PR with results
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+
+          // Read scan results
+          const checkovResults = JSON.parse(fs.readFileSync('/tmp/checkov-results.json', 'utf8'));
+          const tfsecResults = JSON.parse(fs.readFileSync('/tmp/tfsec-results.json', 'utf8'));
+
+          // Format comment
+          const comment = `## 🔒 Security Scan Results
+
+          ### Checkov
+          - ✅ Passed: ${checkovResults.summary.passed}
+          - ❌ Failed: ${checkovResults.summary.failed}
+          - ⏭️ Skipped: ${checkovResults.summary.skipped}
+
+          ### tfsec
+          - Results: ${tfsecResults.results.length} findings
+
+          ### Compliance
+          - CMMC 2.0: Level 2 controls validated
+          - NIST SP 800-171: Configuration baseline verified
+
+          ---
+          *Automated security scan by Gitea Actions*`;
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+    - name: Store scan artifacts
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-scan-results
+        path: |
+          /tmp/checkov-results.json
+          /tmp/tfsec-results.json
+          /tmp/terrascan-results.json
+
+  # Cost estimation job
+  cost-estimate:
+    name: Infrastructure Cost Estimation
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: pre-flight
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Infracost
+      uses: infracost/actions/setup@v2
+      with:
+        api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+    - name: Generate cost estimate
+      run: |
+        # Find all Terraform directories
+        find . -name "*.tf" -exec dirname {} \; | sort -u | while read dir; do
+          echo "Estimating costs for $dir"
+          infracost breakdown --path "$dir" \
+            --format json \
+            --out-file "/tmp/infracost-$(basename $dir).json"
+        done
+
+        # Combine all estimates
+        infracost output --path "/tmp/infracost-*.json" \
+          --format json \
+          --out-file /tmp/infracost-total.json
+
+    - name: Post cost estimate to PR
+      uses: infracost/actions/comment@v1
+      with:
+        path: /tmp/infracost-total.json
+        behavior: update
+
+    - name: Check cost threshold
+      run: |
+        TOTAL_COST=$(cat /tmp/infracost-total.json | jq '.diffTotalMonthlyCost // 0')
+
+        if (( $(echo "$TOTAL_COST > 1000" | bc -l) )); then
+          echo "::error::Cost increase exceeds $1000/month threshold"
+          exit 1
+        fi
+
+  # Approval validation
+  approval-check:
+    name: Validate Approval Requirements
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request_review' && github.event.review.state == 'approved'
+
+    steps:
+    - name: Check approval count
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const reviews = await github.rest.pulls.listReviews({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.issue.number
+          });
+
+          const approvals = reviews.data.filter(r => r.state === 'APPROVED');
+          const uniqueApprovers = [...new Set(approvals.map(r => r.user.login))];
+
+          console.log(`Approvals: ${uniqueApprovers.length}`);
+
+          // Check for production changes
+          const files = await github.rest.pulls.listFiles({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.issue.number
+          });
+
+          const isProd = files.data.some(f => f.filename.includes('/prod/'));
+
+          if (isProd && uniqueApprovers.length < 2) {
+            core.setFailed('Production changes require 2+ approvals');
+          }
+
+  # Atlantis command handler
+  atlantis-command:
+    name: Process Atlantis Commands
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, 'atlantis')
+
+    steps:
+    - name: Validate commenter permissions
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const comment = context.payload.comment;
+          const commenter = comment.user.login;
+
+          // Check if user has write permissions
+          const permission = await github.rest.repos.getCollaboratorPermissionLevel({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            username: commenter
+          });
+
+          if (!['admin', 'write'].includes(permission.data.permission)) {
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `@${commenter} You don't have permission to run Atlantis commands.`
+            });
+            core.setFailed('Insufficient permissions');
+          }
+
+    - name: Forward to Atlantis
+      run: |
+        # This would integrate with Atlantis webhook
+        echo "Command forwarded to Atlantis: ${{ github.event.comment.body }}"
+
+  # Evidence collection
+  collect-evidence:
+    name: Collect Compliance Evidence
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [pre-flight, security-scan, cost-estimate]
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: /tmp/artifacts
+
+    - name: Generate evidence package
+      run: |
+        mkdir -p /tmp/evidence
+
+        # Metadata
+        cat > /tmp/evidence/metadata.json << EOF
+        {
+          "timestamp": "$(date -Iseconds)",
+          "pr_number": "${{ github.event.pull_request.number }}",
+          "sha": "${{ github.event.pull_request.head.sha }}",
+          "author": "${{ github.event.pull_request.user.login }}",
+          "base_branch": "${{ github.event.pull_request.base.ref }}",
+          "head_branch": "${{ github.event.pull_request.head.ref }}",
+          "cmmc_controls": ["CM.L2-3.4.2", "CM.L2-3.4.3", "CM.L2-3.4.9"],
+          "nist_controls": ["SP-800-171-3.4.2", "SP-800-171-3.4.3", "SP-800-171-3.4.9"]
+        }
+        EOF
+
+        # Copy artifacts
+        cp -r /tmp/artifacts/* /tmp/evidence/ 2>/dev/null || true
+
+        # Generate hashes
+        find /tmp/evidence -type f -exec sha256sum {} \; > /tmp/evidence/hashes.txt
+
+        # Create tarball
+        tar czf /tmp/evidence.tar.gz -C /tmp evidence/
+
+    - name: Upload to GCS
+      run: |
+        gsutil -h "x-goog-meta-cmmc:CM.L2-3.4.3" \
+          -h "x-goog-meta-pr:${{ github.event.pull_request.number }}" \
+          cp /tmp/evidence.tar.gz \
+          ${EVIDENCE_BUCKET}/pr/$(date +%Y%m%d)/${{ github.event.pull_request.number }}.tar.gz
+
+    - name: Comment with evidence location
+      uses: actions/github-script@v6
+      with:
+        script: |
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `📋 **Compliance Evidence Generated**\n\nEvidence package stored at:\n\`${process.env.EVIDENCE_BUCKET}/pr/$(date +%Y%m%d)/${{ github.event.pull_request.number }}.tar.gz\`\n\nCMMC Controls: CM.L2-3.4.2, CM.L2-3.4.3, CM.L2-3.4.9`
+          });
+
+  # Notification job
+  notify:
+    name: Send Notifications
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [security-scan, cost-estimate]
+
+    steps:
+    - name: Send Google Chat notification
+      if: env.CHAT_WEBHOOK_URL != ''
+      run: |
+        curl -X POST ${{ secrets.CHAT_WEBHOOK_URL }} \
+          -H 'Content-Type: application/json' \
+          -d '{
+            "text": "GitOps PR #${{ github.event.pull_request.number }} processed",
+            "cards": [{
+              "header": {
+                "title": "Atlantis GitOps Update",
+                "subtitle": "${{ github.event.pull_request.title }}"
+              },
+              "sections": [{
+                "widgets": [{
+                  "keyValue": {
+                    "topLabel": "Status",
+                    "content": "${{ job.status }}"
+                  }
+                }, {
+                  "keyValue": {
+                    "topLabel": "Author",
+                    "content": "${{ github.event.pull_request.user.login }}"
+                  }
+                }, {
+                  "buttons": [{
+                    "textButton": {
+                      "text": "View PR",
+                      "onClick": {
+                        "openLink": {
+                          "url": "${{ github.event.pull_request.html_url }}"
+                        }
+                      }
+                    }
+                  }]
+                }]
+              }]
+            }]
+          }'

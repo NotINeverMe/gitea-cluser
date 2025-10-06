@@ -1,0 +1,128 @@
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#e3f2fd','secondaryColor':'#fff3e0'}}}%%
+
+graph TB
+    subgraph INTERNET["INTERNET (0.0.0.0/0)"]
+        style INTERNET fill:#ffebee,stroke:#d32f2f,stroke-width:3px
+        USER["End Users<br/>Dynamic IPs"]
+        GCP_PUB["GCP Public APIs<br/>googleapis.com"]
+        REGISTRY["Docker Hub<br/>registry-1.docker.io"]
+    end
+
+    subgraph HOST["Host System (Physical/VM)"]
+        style HOST fill:#f5f5f5,stroke:#616161,stroke-width:3px
+
+        subgraph DMZ_NET["Docker Network: dmz-network<br/>10.10.1.0/24"]
+            style DMZ_NET fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+            CADDY["Caddy Proxy<br/>10.10.1.10<br/>Ports: 80→443"]
+            VPN["VPN Gateway<br/>10.10.1.5<br/>Port: 51820"]
+        end
+
+        subgraph APP_NET["Docker Network: app-tier<br/>10.10.2.0/24"]
+            style APP_NET fill:#e3f2fd,stroke:#1976d2,stroke-width:3px
+            GITEA_APP["Gitea<br/>10.10.2.10<br/>Port: 3000"]
+            N8N_APP["n8n<br/>10.10.2.20<br/>Port: 5678"]
+            SONAR_APP["SonarQube<br/>10.10.2.30<br/>Port: 9000"]
+        end
+
+        subgraph MON_NET["Docker Network: monitoring<br/>10.10.5.0/24"]
+            style MON_NET fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+            PROM_APP["Prometheus<br/>10.10.5.10<br/>Port: 9090"]
+            GRAF_APP["Grafana<br/>10.10.5.20<br/>Port: 3001"]
+        end
+
+        subgraph DATA_NET["Docker Network: data-tier<br/>10.10.3.0/24 (Isolated)"]
+            style DATA_NET fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px
+            PG_GITEA["PostgreSQL<br/>10.10.3.10<br/>Port: 5432<br/>Volume: gitea-db-vol"]
+            PG_SONAR["PostgreSQL<br/>10.10.3.20<br/>Port: 5432<br/>Volume: sonar-db-vol"]
+            PG_N8N["PostgreSQL<br/>10.10.3.30<br/>Port: 5432<br/>Volume: n8n-db-vol"]
+            PROM_TSDB["Prometheus TSDB<br/>10.10.3.40<br/>Volume: prom-data-vol"]
+        end
+
+        subgraph SCAN_NET["Docker Network: scan-tier<br/>10.10.4.0/24 (Ephemeral)"]
+            style SCAN_NET fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+            TRIVY_POD["Trivy Container<br/>Dynamic IP<br/>Lifecycle: On-Demand"]
+            GRYPE_POD["Grype Container<br/>Dynamic IP<br/>Lifecycle: On-Demand"]
+            SEMGREP_POD["Semgrep Container<br/>Dynamic IP<br/>Lifecycle: On-Demand"]
+            CHECKOV_POD["Checkov Container<br/>Dynamic IP<br/>Lifecycle: On-Demand"]
+        end
+
+        DOCKER_SOCK["Docker Socket<br/>/var/run/docker.sock"]
+        VOLUMES["Encrypted Volumes<br/>LUKS + AES-256-GCM"]
+    end
+
+    subgraph FIREWALL["Host Firewall Rules (iptables/nftables)"]
+        style FIREWALL fill:#fff9c4,stroke:#f57c00,stroke-width:2px
+        FW1["ACCEPT: 443/tcp → 10.10.1.10"]
+        FW2["ACCEPT: 51820/udp → 10.10.1.5"]
+        FW3["ACCEPT: Established/Related"]
+        FW4["DROP: All other ingress"]
+        FW5["ACCEPT: 10.10.0.0/16 → 10.10.0.0/16"]
+        FW6["REJECT: 10.10.3.0/24 → 0.0.0.0/0"]
+        FW7["ACCEPT: 10.10.4.0/24 → GCP APIs"]
+    end
+
+    %% External to DMZ
+    USER -->|"HTTPS/443<br/>TLS 1.3"| FW1
+    FW1 -->|"Port Forward"| CADDY
+    USER -->|"WireGuard/51820<br/>Encrypted Tunnel"| FW2
+    FW2 -->|"Port Forward"| VPN
+
+    %% DMZ to App Tier
+    CADDY -->|"HTTP/3000<br/>Reverse Proxy"| GITEA_APP
+    CADDY -->|"HTTP/5678<br/>Reverse Proxy"| N8N_APP
+    CADDY -->|"HTTP/9000<br/>Reverse Proxy"| SONAR_APP
+    CADDY -->|"HTTP/3001<br/>Reverse Proxy"| GRAF_APP
+
+    VPN -->|"VPN Tunnel<br/>Admin Access"| GITEA_APP
+    VPN -->|"VPN Tunnel<br/>Admin Access"| N8N_APP
+
+    %% App to Data Tier
+    GITEA_APP -->|"PostgreSQL/5432<br/>TLS Connection"| PG_GITEA
+    SONAR_APP -->|"PostgreSQL/5432<br/>TLS Connection"| PG_SONAR
+    N8N_APP -->|"PostgreSQL/5432<br/>TLS Connection"| PG_N8N
+    PROM_APP -->|"Local Write<br/>Unix Socket"| PROM_TSDB
+
+    %% App to Monitoring
+    PROM_APP -->|"Scrape/9090<br/>Service Discovery"| GITEA_APP
+    PROM_APP -->|"Scrape/5678<br/>Service Discovery"| N8N_APP
+    PROM_APP -->|"Scrape/9000<br/>Service Discovery"| SONAR_APP
+    GRAF_APP -->|"Query/9090<br/>PromQL"| PROM_APP
+
+    %% App to Scan Tier
+    N8N_APP -->|"Docker Socket<br/>Container Spawn"| DOCKER_SOCK
+    DOCKER_SOCK -->|"Create"| TRIVY_POD
+    DOCKER_SOCK -->|"Create"| GRYPE_POD
+    DOCKER_SOCK -->|"Create"| SEMGREP_POD
+    DOCKER_SOCK -->|"Create"| CHECKOV_POD
+
+    %% Scan to Internet
+    TRIVY_POD -->|"HTTPS/443<br/>CVE DB Update"| GCP_PUB
+    GRYPE_POD -->|"HTTPS/443<br/>CVE DB Update"| GCP_PUB
+
+    %% App to GCP
+    N8N_APP -->|"HTTPS/443<br/>Service Account OAuth2"| GCP_PUB
+
+    %% Registry Pull
+    REGISTRY -->|"HTTPS/443<br/>Image Pull"| CADDY
+    CADDY -->|"Registry Proxy"| GITEA_APP
+
+    %% Data Persistence
+    PG_GITEA -.->|"Encrypted Volume"| VOLUMES
+    PG_SONAR -.->|"Encrypted Volume"| VOLUMES
+    PG_N8N -.->|"Encrypted Volume"| VOLUMES
+    PROM_TSDB -.->|"Encrypted Volume"| VOLUMES
+
+    %% Network Isolation Annotations
+    classDef dmz fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef app fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    classDef data fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px
+    classDef scan fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef mon fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    classDef external fill:#ffebee,stroke:#d32f2f,stroke-width:2px
+
+    class CADDY,VPN dmz
+    class GITEA_APP,N8N_APP,SONAR_APP app
+    class PG_GITEA,PG_SONAR,PG_N8N,PROM_TSDB data
+    class TRIVY_POD,GRYPE_POD,SEMGREP_POD,CHECKOV_POD scan
+    class PROM_APP,GRAF_APP mon
+    class USER,GCP_PUB,REGISTRY external

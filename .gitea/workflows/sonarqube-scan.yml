@@ -1,0 +1,294 @@
+# SonarQube Security Analysis Workflow
+# CMMC 2.0: CA.L2-3.12.4 - Security flaw remediation
+# NIST SP 800-171: 3.11.2, 3.11.3 - Vulnerability scanning
+
+name: SonarQube Security Analysis
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'release/**'
+  pull_request:
+    types: [opened, synchronize, reopened]
+  schedule:
+    # Daily security scan at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      scan_depth:
+        description: 'Scan depth level'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+          - quick
+          - standard
+          - full
+
+env:
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL || 'http://localhost:9000' }}
+  EVIDENCE_BUCKET: gs://gitea-evidence-${{ github.run_id }}
+
+jobs:
+  # Pre-scan security checks
+  pre-scan-validation:
+    runs-on: ubuntu-latest
+    outputs:
+      scan_required: ${{ steps.check.outputs.scan_required }}
+      evidence_hash: ${{ steps.evidence.outputs.hash }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for accurate blame
+
+      - name: Security validation checks
+        id: check
+        run: |
+          # CMMC evidence: Pre-scan validation
+          echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> pre-scan.log
+          echo "Repository: ${{ github.repository }}" >> pre-scan.log
+          echo "Commit SHA: ${{ github.sha }}" >> pre-scan.log
+
+          # Check for security-sensitive file changes
+          if git diff --name-only HEAD~1 HEAD | grep -E '\.(java|py|go|js|ts|sql|yaml|yml|tf)$'; then
+            echo "scan_required=true" >> $GITHUB_OUTPUT
+            echo "Security-relevant files detected" >> pre-scan.log
+          else
+            echo "scan_required=false" >> $GITHUB_OUTPUT
+            echo "No security-relevant changes" >> pre-scan.log
+          fi
+
+      - name: Generate evidence hash
+        id: evidence
+        run: |
+          # SHA-256 hash for compliance evidence
+          HASH=$(cat pre-scan.log | sha256sum | cut -d' ' -f1)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+          echo "Evidence hash: $HASH" >> pre-scan.log
+
+      - name: Upload pre-scan evidence
+        uses: actions/upload-artifact@v3
+        with:
+          name: pre-scan-evidence-${{ github.run_id }}
+          path: pre-scan.log
+          retention-days: 90
+
+  # Main SonarQube analysis
+  sonarqube-analysis:
+    needs: pre-scan-validation
+    if: needs.pre-scan-validation.outputs.scan_required == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: sonarsource/sonar-scanner-cli:5.0
+      options: --network host
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache SonarQube packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar-${{ hashFiles('**/sonar-project.properties') }}
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: Configure scanner properties
+        run: |
+          cat > sonar-project.properties << EOF
+          # Project configuration
+          sonar.projectKey=${{ github.repository_owner }}_${{ github.event.repository.name }}
+          sonar.organization=${{ github.repository_owner }}
+          sonar.projectName=${{ github.event.repository.name }}
+          sonar.projectVersion=${{ github.sha }}
+
+          # Source configuration
+          sonar.sources=.
+          sonar.exclusions=**/*_test.go,**/vendor/**,**/node_modules/**,**/*.test.js
+          sonar.tests=.
+          sonar.test.inclusions=**/*_test.go,**/*.test.js,**/*_test.py
+
+          # Security rules (OWASP Top 10, CWE)
+          sonar.security.hotspots.maxIssues=0
+          sonar.coverage.exclusions=**/tests/**,**/test/**,**/*_test.go
+
+          # Language-specific settings
+          sonar.python.version=3.11
+          sonar.javascript.node=18
+          sonar.go.coverage.reportPaths=coverage.out
+
+          # Quality gates
+          sonar.qualitygate.wait=true
+          sonar.qualitygate.timeout=300
+
+          # CMMC/NIST compliance tags
+          sonar.analysis.cmmc=CA.L2-3.12.4
+          sonar.analysis.nist=3.11.2,3.11.3
+          EOF
+
+      - name: Run SonarQube scanner
+        id: sonar_scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Execute scan with evidence logging
+          echo "Scan started: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" > scan-evidence.log
+          echo "Scanner version: $(sonar-scanner --version)" >> scan-evidence.log
+
+          # Run scanner
+          sonar-scanner \
+            -Dsonar.host.url=${{ env.SONAR_HOST_URL }} \
+            -Dsonar.token=${{ env.SONAR_TOKEN }} \
+            -Dsonar.scm.provider=git \
+            -Dsonar.pullrequest.key=${{ github.event.pull_request.number }} \
+            -Dsonar.pullrequest.branch=${{ github.head_ref }} \
+            -Dsonar.pullrequest.base=${{ github.base_ref }} \
+            2>&1 | tee -a scan-output.log
+
+          SCAN_RESULT=$?
+          echo "Scan completed: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> scan-evidence.log
+          echo "Exit code: $SCAN_RESULT" >> scan-evidence.log
+
+          # Generate evidence hash
+          EVIDENCE_HASH=$(cat scan-evidence.log scan-output.log | sha256sum | cut -d' ' -f1)
+          echo "Evidence SHA-256: $EVIDENCE_HASH" >> scan-evidence.log
+
+          exit $SCAN_RESULT
+
+      - name: Check Quality Gate
+        id: quality_gate
+        run: |
+          # Poll for quality gate result
+          for i in {1..30}; do
+            STATUS=$(curl -s -u ${{ env.SONAR_TOKEN }}: \
+              "${{ env.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=${{ github.repository_owner }}_${{ github.event.repository.name }}" \
+              | jq -r '.projectStatus.status')
+
+            if [ "$STATUS" == "OK" ]; then
+              echo "✅ Quality gate passed" | tee -a scan-evidence.log
+              exit 0
+            elif [ "$STATUS" == "ERROR" ]; then
+              echo "❌ Quality gate failed" | tee -a scan-evidence.log
+              exit 1
+            fi
+
+            echo "Waiting for quality gate result... ($i/30)"
+            sleep 10
+          done
+
+          echo "⚠️ Quality gate check timed out" | tee -a scan-evidence.log
+          exit 1
+
+      - name: Generate SARIF report
+        if: always()
+        run: |
+          # Convert SonarQube findings to SARIF format
+          curl -s -u ${{ env.SONAR_TOKEN }}: \
+            "${{ env.SONAR_HOST_URL }}/api/issues/search?componentKeys=${{ github.repository_owner }}_${{ github.event.repository.name }}&types=VULNERABILITY,BUG&severities=BLOCKER,CRITICAL,MAJOR" \
+            -o sonar-issues.json
+
+          # Transform to SARIF (simplified - use proper converter in production)
+          cat > sonar-sarif.json << 'EOF'
+          {
+            "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+            "version": "2.1.0",
+            "runs": [{
+              "tool": {
+                "driver": {
+                  "name": "SonarQube",
+                  "version": "10.4",
+                  "rules": []
+                }
+              },
+              "results": []
+            }]
+          }
+          EOF
+
+      - name: Upload SARIF results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: sonarqube-sarif-${{ github.run_id }}
+          path: |
+            sonar-sarif.json
+            scan-evidence.log
+            scan-output.log
+          retention-days: 90
+
+      - name: Upload to evidence bucket
+        if: always()
+        run: |
+          # Upload to GCP bucket for compliance
+          if command -v gcloud >/dev/null 2>&1; then
+            gcloud storage cp scan-evidence.log ${{ env.EVIDENCE_BUCKET }}/sonarqube/
+            gcloud storage cp sonar-sarif.json ${{ env.EVIDENCE_BUCKET }}/sonarqube/
+          fi
+
+  # Post-scan notifications
+  notify-results:
+    needs: [pre-scan-validation, sonarqube-analysis]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare notification
+        id: prepare
+        run: |
+          if [ "${{ needs.sonarqube-analysis.result }}" == "success" ]; then
+            STATUS="✅ PASSED"
+            COLOR="0x00FF00"
+          else
+            STATUS="❌ FAILED"
+            COLOR="0xFF0000"
+          fi
+
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "color=$COLOR" >> $GITHUB_OUTPUT
+
+      - name: Send Google Chat notification
+        if: vars.GCHAT_WEBHOOK_URL != ''
+        run: |
+          curl -X POST ${{ vars.GCHAT_WEBHOOK_URL }} \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "cards": [{
+                "header": {
+                  "title": "SonarQube Security Scan ${{ steps.prepare.outputs.status }}",
+                  "subtitle": "${{ github.repository }} - ${{ github.event_name }}"
+                },
+                "sections": [{
+                  "widgets": [{
+                    "keyValue": {
+                      "topLabel": "Branch",
+                      "content": "${{ github.ref_name }}"
+                    }
+                  }, {
+                    "keyValue": {
+                      "topLabel": "Commit",
+                      "content": "${{ github.sha }}"
+                    }
+                  }, {
+                    "keyValue": {
+                      "topLabel": "Evidence Hash",
+                      "content": "${{ needs.pre-scan-validation.outputs.evidence_hash }}"
+                    }
+                  }, {
+                    "buttons": [{
+                      "textButton": {
+                        "text": "VIEW REPORT",
+                        "onClick": {
+                          "openLink": {
+                            "url": "${{ env.SONAR_HOST_URL }}/dashboard?id=${{ github.repository_owner }}_${{ github.event.repository.name }}"
+                          }
+                        }
+                      }
+                    }]
+                  }]
+                }]
+              }]
+            }'

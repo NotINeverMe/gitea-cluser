@@ -1,0 +1,201 @@
+# Operational Alert Rules
+# CMMC 2.0: SI.L2-3.14.4, SI.L2-3.14.6 - System Monitoring
+# NIST SP 800-171: 3.14.4, 3.14.6 - System and Information Integrity
+# NIST SP 800-53: SI-4 - Information System Monitoring
+
+groups:
+  - name: operational_alerts
+    interval: 30s
+    rules:
+      # Service availability
+      - alert: ServiceDown
+        expr: |
+          up{job=~"gitea|sonarqube|n8n|atlantis|grafana"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: availability
+          compliance: "CMMC:SI.L2-3.14.4,NIST171:3.14.4,NIST53:SI-4"
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "{{ $labels.job }} has been down for more than 2 minutes"
+          runbook_url: "https://docs.example.com/runbooks/service-down"
+
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: |
+          100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 10m
+        labels:
+          severity: warning
+          category: performance
+          compliance: "CMMC:SI.L2-3.14.6,NIST171:3.14.6"
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value | printf \"%.2f\" }}% on {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/high-cpu"
+          dashboard_url: "https://grafana.example.com/d/node/node-exporter"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 90
+        for: 10m
+        labels:
+          severity: warning
+          category: performance
+          compliance: "CMMC:SI.L2-3.14.6,NIST171:3.14.6"
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value | printf \"%.2f\" }}% on {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/high-memory"
+
+      # Disk space low
+      - alert: DiskSpaceLow
+        expr: |
+          100 * (node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.lxcfs|squashfs"} / node_filesystem_size_bytes) < 15
+        for: 5m
+        labels:
+          severity: warning
+          category: storage
+          compliance: "CMMC:SI.L2-3.14.6,NIST171:3.14.6"
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Only {{ $value | printf \"%.2f\" }}% disk space remaining on {{ $labels.mountpoint }}"
+          runbook_url: "https://docs.example.com/runbooks/disk-space"
+
+      # Critical disk space
+      - alert: DiskSpaceCritical
+        expr: |
+          100 * (node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.lxcfs|squashfs"} / node_filesystem_size_bytes) < 5
+        for: 2m
+        labels:
+          severity: critical
+          category: storage
+          compliance: "CMMC:SI.L2-3.14.6,NIST171:3.14.6"
+        annotations:
+          summary: "Critical disk space on {{ $labels.instance }}"
+          description: "Only {{ $value | printf \"%.2f\" }}% disk space remaining on {{ $labels.mountpoint }}"
+          runbook_url: "https://docs.example.com/runbooks/disk-critical"
+
+      # Container restart loop
+      - alert: ContainerRestartLoop
+        expr: |
+          rate(container_restarts_total[15m]) > 0.25
+        for: 5m
+        labels:
+          severity: warning
+          category: stability
+          compliance: "CMMC:SI.L2-3.14.4,NIST171:3.14.4"
+        annotations:
+          summary: "Container {{ $labels.name }} is restarting frequently"
+          description: "Container {{ $labels.name }} has restarted {{ $value | printf \"%.2f\" }} times per minute"
+          runbook_url: "https://docs.example.com/runbooks/container-restart"
+
+      # Database connection pool exhaustion
+      - alert: DatabaseConnectionPoolExhausted
+        expr: |
+          pg_stat_database_numbackends / pg_settings_max_connections > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          category: database
+          compliance: "CMMC:SI.L2-3.14.6,NIST171:3.14.6"
+        annotations:
+          summary: "Database connection pool near exhaustion"
+          description: "{{ $value | humanizePercentage }} of connections used on {{ $labels.datname }}"
+          runbook_url: "https://docs.example.com/runbooks/db-connections"
+
+      # Pipeline failure rate
+      - alert: HighPipelineFailureRate
+        expr: |
+          rate(ci_pipeline_failures_total[1h]) / rate(ci_pipeline_runs_total[1h]) > 0.25
+        for: 30m
+        labels:
+          severity: warning
+          category: cicd
+        annotations:
+          summary: "High CI/CD pipeline failure rate"
+          description: "{{ $value | humanizePercentage }} of pipelines failing in the last hour"
+          dashboard_url: "https://grafana.example.com/d/cicd/pipeline-performance"
+
+      # Backup failure
+      - alert: BackupFailure
+        expr: |
+          backup_last_success == 0 or
+          (time() - backup_last_success_timestamp) > 86400
+        for: 1h
+        labels:
+          severity: critical
+          category: backup
+          compliance: "CMMC:CP.L2-3.4.7,NIST171:3.4.7,NIST53:CP-9"
+        annotations:
+          summary: "Backup failure for {{ $labels.job }}"
+          description: "Backup hasn't succeeded in {{ $value | humanizeDuration }}"
+          runbook_url: "https://docs.example.com/runbooks/backup-failure"
+
+      # Network errors
+      - alert: HighNetworkErrors
+        expr: |
+          rate(node_network_transmit_errs_total[5m]) > 0.01 or
+          rate(node_network_receive_errs_total[5m]) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+          category: network
+        annotations:
+          summary: "High network error rate on {{ $labels.instance }}"
+          description: "Network interface {{ $labels.device }} experiencing {{ $value }} errors per second"
+          runbook_url: "https://docs.example.com/runbooks/network-errors"
+
+      # GCP quota exhaustion
+      - alert: GCPQuotaExhaustion
+        expr: |
+          stackdriver_gce_quota_usage / stackdriver_gce_quota_limit > 0.9
+        for: 15m
+        labels:
+          severity: warning
+          category: cloud
+        annotations:
+          summary: "GCP quota near limit for {{ $labels.metric }}"
+          description: "{{ $value | humanizePercentage }} of quota used for {{ $labels.metric }}"
+          runbook_url: "https://docs.example.com/runbooks/gcp-quota"
+
+      # Cost threshold exceeded
+      - alert: CostThresholdExceeded
+        expr: |
+          infracost_monthly_cost_estimate > 5000
+        for: 1h
+        labels:
+          severity: warning
+          category: cost
+        annotations:
+          summary: "Monthly cost estimate exceeds threshold"
+          description: "Estimated monthly cost is ${{ $value | printf \"%.2f\" }}"
+          dashboard_url: "https://grafana.example.com/d/cost/cost-analysis"
+
+      # n8n workflow failures
+      - alert: WorkflowExecutionFailures
+        expr: |
+          rate(n8n_workflow_failures_total[30m]) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+          category: automation
+        annotations:
+          summary: "High workflow failure rate in n8n"
+          description: "{{ $value | printf \"%.2f\" }} workflow failures per minute"
+          runbook_url: "https://docs.example.com/runbooks/workflow-failures"
+
+      # Atlantis plan failures
+      - alert: TerraformPlanFailures
+        expr: |
+          rate(atlantis_plan_failures_total[1h]) > 2
+        for: 30m
+        labels:
+          severity: warning
+          category: gitops
+        annotations:
+          summary: "Multiple Terraform plan failures"
+          description: "{{ $value }} Terraform plan failures in the last hour"
+          runbook_url: "https://docs.example.com/runbooks/terraform-failures"

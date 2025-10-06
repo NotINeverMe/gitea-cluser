@@ -1,0 +1,166 @@
+@startuml Authorization_Boundary_Diagram
+!define ICONURL https://raw.githubusercontent.com/tupadr3/plantuml-icon-font-sprites/v2.4.0
+!include ICONURL/common.puml
+!include ICONURL/font-awesome-5/lock.puml
+!include ICONURL/font-awesome-5/shield_alt.puml
+!include ICONURL/font-awesome-5/database.puml
+!include ICONURL/font-awesome-5/cloud.puml
+
+skinparam backgroundColor #FFFFFF
+skinparam rectangleBackgroundColor #E3F2FD
+skinparam rectangleBorderColor #1976D2
+skinparam databaseBackgroundColor #E8F5E9
+skinparam databaseBorderColor #388E3C
+skinparam cloudBackgroundColor #FFF9C4
+skinparam cloudBorderColor #F9A825
+skinparam arrowColor #424242
+
+title Authorization Boundary Diagram - Gitea DevSecOps Platform\nCMMC 2.0 Compliant | NIST SP 800-171 Rev. 2
+
+package "Z-1: INTERNET ZONE (Untrusted)" as Z1 #FFEBEE {
+  actor "A-1: End Users\n[OOS]" as A1
+  cloud "A-2: GCP Public APIs\n[External]\nSCC, CAI, Logging" as A2
+  cloud "A-3: External Registries\n[External]\nDocker Hub" as A3
+}
+
+package "Z-2: DMZ / EDGE ZONE (Controlled)" as Z2 #FFF3E0 {
+  rectangle "A-4: Reverse Proxy\n[SPA]\nCaddy/Traefik\nTLS 1.3\n10.10.1.10" as A4 <<SPA>>
+  rectangle "A-5: VPN Gateway\n[SPA]\nWireGuard\nMFA Required\n10.10.1.5" as A5 <<SPA>>
+}
+
+package "Z-3: APPLICATION TIER (CUI Processing)" as Z3 #E3F2FD {
+  rectangle "A-6: Gitea\n[CUI]\nSource Code Repo\n10.10.2.10" as A6 <<CUI>> #1E88E5
+  rectangle "A-7: n8n Workflow\n[SPA]\nAutomation\n10.10.2.20" as A7 <<SPA>>
+  rectangle "A-8: SonarQube\n[SPA]\nSAST Analysis\n10.10.2.30" as A8 <<SPA>>
+  rectangle "A-9: Prometheus\n[SPA]\nMonitoring\n10.10.2.40" as A9 <<SPA>>
+  rectangle "A-10: Grafana\n[SPA]\nVisualization\n10.10.2.50" as A10 <<SPA>>
+}
+
+package "Z-4: DATA TIER (CUI Storage)" as Z4 #E8F5E9 {
+  database "S-1: Gitea PostgreSQL\n[CUI]\nAES-256-GCM\n10.10.3.10" as S1 <<CUI>> #43A047
+  database "S-2: SonarQube PostgreSQL\n[SPA]\nAES-256-GCM\n10.10.3.20" as S2 <<SPA>>
+  database "S-3: n8n PostgreSQL\n[SPA]\nAES-256-GCM\n10.10.3.30" as S3 <<SPA>>
+  database "S-4: Prometheus TSDB\n[SPA]\nLocal Volume\n10.10.3.40" as S4 <<SPA>>
+}
+
+package "Z-5: SECURITY SCANNING ZONE (Isolated)" as Z5 #F3E5F5 {
+  rectangle "A-11: Trivy\n[SPC]\nCVE Scanner" as A11 <<SPC>>
+  rectangle "A-12: Grype\n[SPC]\nSBOM Analysis" as A12 <<SPC>>
+  rectangle "A-13: Semgrep\n[SPC]\nSAST Rules" as A13 <<SPC>>
+  rectangle "A-14: Checkov\n[SPC]\nIaC Security" as A14 <<SPC>>
+  rectangle "A-15: tfsec\n[SPC]\nTF Security" as A15 <<SPC>>
+  rectangle "A-16: Terrascan\n[SPC]\nIaC Compliance" as A16 <<SPC>>
+  rectangle "A-17: Infracost\n[SPC]\nCost Analysis" as A17 <<SPC>>
+}
+
+package "Z-6: GCP CLOUD ZONE (External Trust Boundary)" as Z6 #FFF9C4 {
+  database "S-5: GCS Evidence\n[CRMA]\nImmutable\n7-Year Retention\nCMEK AES-256" as S5 <<CRMA>> #2E7D32
+  cloud "A-18: Security\nCommand Center\n[External]" as A18
+  cloud "A-19: Cloud Asset\nInventory\n[External]" as A19
+  cloud "A-20: Cloud Logging\n[External]" as A20
+  cloud "A-21: Google Chat\n[External]" as A21
+}
+
+' Trust Boundary Crossings
+A1 -down-> A4 : F-1: HTTPS/443\nTLS 1.3, OAuth2
+A1 -down-> A4 : F-2: SSH/22\nPublic Key Auth
+A3 -down-> A4 : F-3: HTTPS/443\nRegistry Pull
+A1 -down-> A5 : F-4: WireGuard/51820\nMFA Required
+
+' DMZ to Application
+A4 -down-> A6 : F-5: HTTP/3000\nSession Auth
+A4 -down-> A7 : F-6: HTTP/5678\nAPI Key
+A4 -down-> A8 : F-7: HTTP/9000\nToken Auth
+A4 -down-> A10 : F-8: HTTP/3001\nBasic Auth
+A5 -down-> A6 : F-9: SSH/Admin\nCert Auth
+A5 -down-> A7 : F-10: SSH/Admin\nCert Auth
+
+' Application to Data
+A6 -down-> S1 : F-11: PostgreSQL/5432\nTLS + Cert
+A8 -down-> S2 : F-12: PostgreSQL/5432\nTLS + Cert
+A7 -down-> S3 : F-13: PostgreSQL/5432\nTLS + Cert
+A9 -down-> S4 : F-14: TSDB Write\nLocal Socket
+
+' Application Inter-connections
+A6 -right-> A7 : F-15: Webhook\nHMAC Signature
+A7 -right-> A8 : F-16: HTTP/9000\nAPI Token
+A9 -up-> A6 : F-17: Metrics Scrape
+A9 -up-> A7 : F-18: Metrics Scrape
+A9 -up-> A8 : F-19: Metrics Scrape
+A10 -left-> A9 : F-20: PromQL Query\nToken Auth
+
+' Application to Scanning
+A6 -down-> A11 : F-21: Docker Socket\nContainer Spawn
+A6 -down-> A12 : F-22: Docker Socket\nContainer Spawn
+A6 -down-> A13 : F-23: Docker Socket\nContainer Spawn
+A7 -down-> A14 : F-24: Docker Exec\nVolume Mount
+A7 -down-> A15 : F-25: Docker Exec\nVolume Mount
+A7 -down-> A16 : F-26: Docker Exec\nVolume Mount
+A7 -down-> A17 : F-27: Docker Exec\nCost Analysis
+
+' Scanning to Internet
+A11 -up-> A2 : F-28: HTTPS/443\nTrivy DB Pull
+A12 -up-> A2 : F-29: HTTPS/443\nGrype DB Pull
+
+' Application to GCP
+A7 -right-> S5 : F-30: HTTPS/443\nService Account OAuth2
+A7 -right-> A18 : F-31: HTTPS/443\nService Account OAuth2
+A7 -right-> A19 : F-32: HTTPS/443\nService Account OAuth2
+A7 -right-> A20 : F-33: HTTPS/443\nService Account OAuth2
+A7 -right-> A21 : F-34: HTTPS/443\nWebhook Secret
+
+' GCP to Application
+A18 -left-> A7 : F-35: Pub/Sub Push\nHTTPS/443, JWT Auth
+
+legend right
+  |= Category |= Description |= Control Reference |
+  | [CUI] | Controlled Unclassified Information | NIST SP 800-171 Rev. 2 §3.1.1 |
+  | [SPA] | Security Protection Asset | CMMC 2.0 Practice SC.L2-3.13.1 |
+  | [CRMA] | Compliance Record Maintenance Asset | NIST SP 800-171 Rev. 2 §3.3.1 |
+  | [SPC] | Specialized Security Asset | CMMC 2.0 Practice CA.L2-3.12.1 |
+  | [OOS] | Out of Scope | N/A |
+  | [External] | Third-Party Dependency | NIST SP 800-171 Rev. 2 §3.13.8 |
+
+  **Encryption Standards:**
+  - TLS 1.3 (All HTTPS traffic)
+  - AES-256-GCM (Data at rest)
+  - CMEK (GCS customer-managed encryption)
+
+  **Authentication Methods:**
+  - OAuth 2.0 (User access, GCP services)
+  - Public Key Infrastructure (SSH, Certificates)
+  - API Keys/Tokens (Service-to-service)
+  - HMAC Signatures (Webhooks)
+  - MFA (Administrative access)
+endlegend
+
+note right of Z3
+  **Network Isolation:**
+  - app-tier: 10.10.2.0/24
+  - data-tier: 10.10.3.0/24
+  - scan-tier: 10.10.4.0/24
+  - monitoring: 10.10.5.0/24
+
+  **Control References:**
+  - AC-3: Access Enforcement
+  - SC-7: Boundary Protection
+  - SC-8: Transmission Confidentiality
+  - SC-28: Protection of Info at Rest
+end note
+
+note left of Z6
+  **External Trust Boundary**
+
+  All GCP communications:
+  - TLS 1.3 mutual authentication
+  - Service Account credentials
+  - IAM policy enforcement
+  - Cloud Armor DDoS protection
+
+  **NIST SP 800-53 Rev. 5:**
+  - SC-7(3): Access Points
+  - SC-8(1): Cryptographic Protection
+  - AU-9(3): Cryptographic Protection
+end note
+
+@enduml

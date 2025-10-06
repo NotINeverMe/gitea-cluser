@@ -1,0 +1,163 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://gitea.devsecops.local/schemas/evidence-manifest.json",
+  "title": "Evidence Manifest Schema",
+  "description": "Schema for evidence collection manifest files",
+  "type": "object",
+  "required": [
+    "manifest_version",
+    "generated_timestamp",
+    "evidence_directory",
+    "total_files",
+    "files",
+    "statistics",
+    "manifest_hash"
+  ],
+  "properties": {
+    "manifest_version": {
+      "type": "string",
+      "description": "Version of the manifest format"
+    },
+    "generated_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this manifest was generated"
+    },
+    "evidence_directory": {
+      "type": "string",
+      "description": "Base directory containing evidence files"
+    },
+    "total_files": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total number of evidence files in manifest"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/file_entry"
+      },
+      "description": "List of all evidence files"
+    },
+    "statistics": {
+      "type": "object",
+      "required": ["total_files", "total_size_bytes"],
+      "properties": {
+        "total_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sources": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "artifact_types": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "control_frameworks": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "control_coverage": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "gcp_projects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "manifest_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA-256 hash of manifest content for integrity"
+    }
+  },
+  "definitions": {
+    "file_entry": {
+      "type": "object",
+      "required": [
+        "file_path",
+        "file_name",
+        "file_size_bytes",
+        "sha256_hash"
+      ],
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": "Absolute path to evidence file"
+        },
+        "file_name": {
+          "type": "string",
+          "description": "Name of the evidence file"
+        },
+        "file_size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Size of file in bytes"
+        },
+        "created_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "File creation timestamp"
+        },
+        "modified_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "File modification timestamp"
+        },
+        "sha256_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 hash of file contents"
+        },
+        "evidence_metadata": {
+          "type": "object",
+          "description": "Metadata extracted from evidence file",
+          "properties": {
+            "evidence_id": {
+              "type": "string"
+            },
+            "control_framework": {
+              "type": "string"
+            },
+            "control_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "source": {
+              "type": "string"
+            },
+            "artifact_type": {
+              "type": "string"
+            },
+            "collection_timestamp": {
+              "type": "string"
+            },
+            "gcp_project": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

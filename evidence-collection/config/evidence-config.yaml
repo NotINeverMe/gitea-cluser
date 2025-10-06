@@ -1,0 +1,78 @@
+# GCP Evidence Collection Configuration
+
+# GCP Project Settings
+gcp_project_id: "your-project-id"
+gcp_organization_id: "organizations/123456789"
+
+# Service Account
+service_account_path: "/home/notme/Desktop/gitea/evidence-collection/config/gcp-service-account.json"
+
+# GCS Storage
+gcs_bucket: "evidence-collection-bucket"
+gcs_region: "us-central1"
+
+# Control Framework
+control_framework: "CMMC_2.0"
+
+# KMS Locations to scan
+kms_locations:
+  - global
+  - us-east1
+  - us-west1
+  - us-central1
+
+# Collection Schedule (cron format)
+collection_schedule:
+  scc_findings: "0 2 * * *"        # Daily at 2 AM
+  asset_inventory: "0 3 * * 0"     # Weekly on Sunday at 3 AM
+  iam_evidence: "0 4 * * 1"        # Weekly on Monday at 4 AM
+  encryption_audit: "0 5 * * 1"    # Weekly on Monday at 5 AM
+  logging_export: "0 1 * * *"      # Daily at 1 AM
+
+# Retention Policies (days)
+retention:
+  admin_activity_logs: 2555    # 7 years
+  data_access_logs: 90         # 90 days per regulation
+  system_event_logs: 2555      # 7 years
+  security_audit_logs: 2555    # 7 years
+  scc_findings: 730            # 2 years
+  asset_snapshots: 730         # 2 years
+
+# Notification Settings
+notifications:
+  enabled: true
+  google_chat_webhook: "https://chat.googleapis.com/v1/spaces/SPACE/messages?key=KEY&token=TOKEN"
+  notify_on_failure: true
+  notify_on_success: false
+  notify_on_compliance_issues: true
+
+# Evidence Quality Settings
+evidence:
+  require_sha256: true
+  require_schema_validation: true
+  min_evidence_per_control: 3
+
+# Security Command Center Settings
+scc:
+  severity_filter: "CRITICAL,HIGH,MEDIUM"
+  state_filter: "ACTIVE"
+  max_findings: 1000
+
+# Asset Inventory Settings
+asset_inventory:
+  collect_iam_policies: true
+  scope: "project"  # or "organization"
+  asset_types:
+    - "compute.googleapis.com/Instance"
+    - "storage.googleapis.com/Bucket"
+    - "iam.googleapis.com/ServiceAccount"
+    - "cloudkms.googleapis.com/CryptoKey"
+    - "sqladmin.googleapis.com/Instance"
+    - "container.googleapis.com/Cluster"
+
+# Logging Settings
+logging:
+  log_level: "INFO"
+  log_file: "/home/notme/Desktop/gitea/evidence-collection/logs/evidence-collection.log"
+  max_log_size_mb: 100
+  log_retention_days: 90

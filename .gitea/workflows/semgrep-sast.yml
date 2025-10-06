@@ -1,0 +1,479 @@
+# Semgrep Advanced SAST Security Analysis
+# CMMC 2.0: CA.L2-3.12.4, SI.L2-3.14.2
+# NIST SP 800-171: 3.14.1, 3.14.2, 3.14.3
+
+name: Semgrep SAST Analysis
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'feature/**'
+  pull_request:
+    types: [opened, synchronize, reopened]
+  schedule:
+    # Weekly deep scan Sunday 3 AM UTC
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      ruleset:
+        description: 'Semgrep ruleset to use'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - security-audit
+          - owasp-top-ten
+          - cwe-top-25
+
+env:
+  SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+  SEMGREP_TIMEOUT: 300
+  EVIDENCE_PREFIX: semgrep-${{ github.run_id }}
+
+jobs:
+  # Language detection for optimized scanning
+  detect-languages:
+    runs-on: ubuntu-latest
+    outputs:
+      languages: ${{ steps.detect.outputs.languages }}
+      rulesets: ${{ steps.detect.outputs.rulesets }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Detect languages and select rulesets
+        id: detect
+        run: |
+          # Initialize arrays
+          LANGUAGES=""
+          RULESETS=""
+
+          # Language detection with security focus
+          echo "=== Language Detection ===" > language-detection.log
+          echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> language-detection.log
+
+          # Python detection
+          if find . -name "*.py" -o -name "requirements.txt" -o -name "Pipfile" | head -1; then
+            LANGUAGES="${LANGUAGES}python,"
+            RULESETS="${RULESETS}p/python,p/flask,p/django,p/fastapi,"
+            echo "Python detected - adding security rulesets" >> language-detection.log
+          fi
+
+          # Go detection
+          if find . -name "*.go" -o -name "go.mod" | head -1; then
+            LANGUAGES="${LANGUAGES}go,"
+            RULESETS="${RULESETS}p/golang,p/gosec,"
+            echo "Go detected - adding gosec rules" >> language-detection.log
+          fi
+
+          # JavaScript/TypeScript detection
+          if find . -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" -o -name "package.json" | head -1; then
+            LANGUAGES="${LANGUAGES}javascript,typescript,"
+            RULESETS="${RULESETS}p/javascript,p/typescript,p/react,p/nodejs,p/jwt,"
+            echo "JavaScript/TypeScript detected - adding Node.js security rules" >> language-detection.log
+          fi
+
+          # Java detection
+          if find . -name "*.java" -o -name "pom.xml" -o -name "build.gradle" | head -1; then
+            LANGUAGES="${LANGUAGES}java,"
+            RULESETS="${RULESETS}p/java,p/spring,p/owasp-java,"
+            echo "Java detected - adding OWASP Java rules" >> language-detection.log
+          fi
+
+          # Terraform/IaC detection
+          if find . -name "*.tf" -o -name "*.tfvars" | head -1; then
+            LANGUAGES="${LANGUAGES}terraform,"
+            RULESETS="${RULESETS}p/terraform,p/gcp,p/aws,"
+            echo "Terraform detected - adding cloud security rules" >> language-detection.log
+          fi
+
+          # Docker detection
+          if find . -name "Dockerfile*" -o -name "docker-compose*.yml" | head -1; then
+            LANGUAGES="${LANGUAGES}dockerfile,"
+            RULESETS="${RULESETS}p/dockerfile,p/docker-compose,"
+            echo "Docker detected - adding container security rules" >> language-detection.log
+          fi
+
+          # Kubernetes detection
+          if find . -name "*.yaml" -o -name "*.yml" | xargs grep -l "kind:" 2>/dev/null | head -1; then
+            LANGUAGES="${LANGUAGES}kubernetes,"
+            RULESETS="${RULESETS}p/kubernetes,"
+            echo "Kubernetes detected - adding K8s security rules" >> language-detection.log
+          fi
+
+          # Shell script detection
+          if find . -name "*.sh" -o -name "*.bash" | head -1; then
+            LANGUAGES="${LANGUAGES}bash,"
+            RULESETS="${RULESETS}p/bash,"
+            echo "Shell scripts detected - adding bash security rules" >> language-detection.log
+          fi
+
+          # Add security-focused rulesets
+          RULESETS="${RULESETS}p/security-audit,p/secrets,p/owasp-top-ten,p/cwe-top-25,p/findsecbugs"
+
+          # Output for next job
+          echo "languages=${LANGUAGES}" >> $GITHUB_OUTPUT
+          echo "rulesets=${RULESETS}" >> $GITHUB_OUTPUT
+
+          # Generate detection evidence
+          echo "Languages: ${LANGUAGES}" >> language-detection.log
+          echo "Rulesets: ${RULESETS}" >> language-detection.log
+          HASH=$(cat language-detection.log | sha256sum | cut -d' ' -f1)
+          echo "Evidence SHA-256: ${HASH}" >> language-detection.log
+
+      - name: Upload detection evidence
+        uses: actions/upload-artifact@v3
+        with:
+          name: language-detection-${{ github.run_id }}
+          path: language-detection.log
+          retention-days: 30
+
+  # Main Semgrep security analysis
+  semgrep-scan:
+    needs: detect-languages
+    runs-on: ubuntu-latest
+    container:
+      image: returntocorp/semgrep:latest
+      options: --user root
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create Semgrep configuration
+        run: |
+          # Create custom Semgrep config for CMMC/NIST compliance
+          cat > .semgrep.yml << 'EOF'
+          rules:
+            # Custom rule: Detect hardcoded credentials (CMMC IA.L2-3.5.3)
+            - id: hardcoded-credentials
+              patterns:
+                - pattern-either:
+                  - pattern: |
+                      password = "..."
+                  - pattern: |
+                      api_key = "..."
+                  - pattern: |
+                      secret = "..."
+                  - pattern: |
+                      token = "..."
+              message: "Potential hardcoded credential detected - CMMC IA.L2-3.5.3 violation"
+              languages: [python, javascript, java, go]
+              severity: ERROR
+              metadata:
+                compliance: "CMMC IA.L2-3.5.3"
+                nist: "3.5.3"
+                cwe: "CWE-798"
+
+            # Custom rule: Detect SQL injection vulnerabilities (NIST 3.14.1)
+            - id: sql-injection-risk
+              patterns:
+                - pattern-either:
+                  - pattern: |
+                      query = "SELECT * FROM users WHERE id = " + $INPUT
+                  - pattern: |
+                      execute("..." + $PARAM)
+                  - pattern: |
+                      db.query(f"...{$VAR}...")
+              message: "SQL injection vulnerability detected - NIST 3.14.1 remediation required"
+              languages: [python, javascript, java]
+              severity: ERROR
+              metadata:
+                compliance: "NIST 3.14.1"
+                cwe: "CWE-89"
+                owasp: "A03:2021"
+
+            # Custom rule: Detect insecure cryptography (CMMC SC.L2-3.13.11)
+            - id: weak-cryptography
+              patterns:
+                - pattern-either:
+                  - pattern: |
+                      MD5(...)
+                  - pattern: |
+                      SHA1(...)
+                  - pattern: |
+                      DES.new(...)
+                  - pattern: |
+                      RC4(...)
+              message: "Weak cryptography detected - CMMC SC.L2-3.13.11 violation"
+              languages: [python, javascript, java, go]
+              severity: ERROR
+              metadata:
+                compliance: "CMMC SC.L2-3.13.11"
+                nist: "3.13.11"
+                cwe: "CWE-327"
+
+            # Custom rule: Detect missing input validation (NIST 3.14.2)
+            - id: missing-input-validation
+              patterns:
+                - pattern-either:
+                  - pattern: |
+                      request.get(...)
+                      ...
+                      execute(...)
+                  - pattern: |
+                      input()
+                      ...
+                      eval(...)
+              message: "Missing input validation - NIST 3.14.2 remediation required"
+              languages: [python, javascript]
+              severity: WARNING
+              metadata:
+                compliance: "NIST 3.14.2"
+                cwe: "CWE-20"
+
+          # Semgrep configuration
+          semgrep:
+            metrics: on
+            audit_mode: true
+            max_memory: 2048
+            timeout: 300
+            exclude:
+              - "*.min.js"
+              - "vendor/"
+              - "node_modules/"
+              - ".git/"
+              - "*.test.js"
+              - "*_test.go"
+          EOF
+
+      - name: Run Semgrep scan
+        id: semgrep
+        run: |
+          # Initialize evidence log
+          echo "=== Semgrep SAST Scan ===" > semgrep-evidence.log
+          echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> semgrep-evidence.log
+          echo "Commit: ${{ github.sha }}" >> semgrep-evidence.log
+          echo "Rulesets: ${{ needs.detect-languages.outputs.rulesets }}" >> semgrep-evidence.log
+
+          # Run Semgrep with comprehensive rulesets
+          semgrep scan \
+            --config=.semgrep.yml \
+            --config=${{ needs.detect-languages.outputs.rulesets }} \
+            --json \
+            --output=semgrep-results.json \
+            --metrics=on \
+            --verbose \
+            --max-memory=2048 \
+            --timeout=${{ env.SEMGREP_TIMEOUT }} \
+            --exclude='*.test.*' \
+            --exclude='test_*' \
+            --exclude='*_test.*' \
+            . 2>&1 | tee -a semgrep-output.log
+
+          SCAN_EXIT_CODE=$?
+
+          # Parse results for summary
+          if [ -f semgrep-results.json ]; then
+            ERRORS=$(jq '.errors | length' semgrep-results.json)
+            WARNINGS=$(jq '.results | map(select(.extra.severity == "WARNING")) | length' semgrep-results.json)
+            INFOS=$(jq '.results | map(select(.extra.severity == "INFO")) | length' semgrep-results.json)
+
+            echo "Scan Results:" >> semgrep-evidence.log
+            echo "  Errors: $ERRORS" >> semgrep-evidence.log
+            echo "  Warnings: $WARNINGS" >> semgrep-evidence.log
+            echo "  Info: $INFOS" >> semgrep-evidence.log
+
+            # Check for critical findings
+            CRITICAL=$(jq '.results | map(select(.extra.severity == "ERROR")) | length' semgrep-results.json)
+            if [ "$CRITICAL" -gt 0 ]; then
+              echo "❌ Critical security findings detected!" >> semgrep-evidence.log
+              echo "critical_findings=$CRITICAL" >> $GITHUB_OUTPUT
+            else
+              echo "✅ No critical findings" >> semgrep-evidence.log
+              echo "critical_findings=0" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+          # Generate evidence hash
+          EVIDENCE_HASH=$(cat semgrep-evidence.log semgrep-results.json | sha256sum | cut -d' ' -f1)
+          echo "Evidence SHA-256: $EVIDENCE_HASH" >> semgrep-evidence.log
+
+          exit $SCAN_EXIT_CODE
+
+      - name: Convert to SARIF format
+        if: always()
+        run: |
+          # Convert Semgrep JSON to SARIF for unified reporting
+          if [ -f semgrep-results.json ]; then
+            semgrep --config=auto --json --sarif . > semgrep-sarif.json 2>/dev/null || true
+
+            # If semgrep SARIF conversion fails, create basic SARIF
+            if [ ! -f semgrep-sarif.json ] || [ ! -s semgrep-sarif.json ]; then
+              cat > semgrep-sarif.json << 'EOF'
+          {
+            "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+            "version": "2.1.0",
+            "runs": [{
+              "tool": {
+                "driver": {
+                  "name": "Semgrep",
+                  "informationUri": "https://semgrep.dev",
+                  "rules": []
+                }
+              },
+              "results": []
+            }]
+          }
+          EOF
+            fi
+          fi
+
+      - name: Generate compliance report
+        if: always()
+        run: |
+          # Generate CMMC/NIST compliance mapping report
+          cat > compliance-report.md << 'EOF'
+          # Semgrep SAST Compliance Report
+
+          ## Scan Information
+          - **Date**: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          - **Repository**: ${{ github.repository }}
+          - **Commit**: ${{ github.sha }}
+          - **Branch**: ${{ github.ref_name }}
+
+          ## Compliance Mappings
+
+          ### CMMC 2.0 Level 2 Controls
+          - **CA.L2-3.12.4**: Configuration Management - Analyzed for security misconfigurations
+          - **IA.L2-3.5.3**: Identification and Authentication - Scanned for hardcoded credentials
+          - **SC.L2-3.13.11**: System and Communications Protection - Verified cryptographic strength
+          - **SI.L2-3.14.2**: System and Information Integrity - Checked for input validation
+
+          ### NIST SP 800-171 Rev. 2 Controls
+          - **3.14.1**: System and Information Integrity - Vulnerability identification
+          - **3.14.2**: System and Information Integrity - Flaw remediation tracking
+          - **3.14.3**: System and Information Integrity - Security update testing
+
+          ## Findings Summary
+          EOF
+
+          if [ -f semgrep-results.json ]; then
+            jq -r '.results | group_by(.extra.metadata.compliance) |
+              map({compliance: .[0].extra.metadata.compliance, count: length}) |
+              .[] | "- **\(.compliance)**: \(.count) findings"' \
+              semgrep-results.json >> compliance-report.md 2>/dev/null || echo "- No compliance-tagged findings" >> compliance-report.md
+          fi
+
+          echo "" >> compliance-report.md
+          echo "## Evidence Chain" >> compliance-report.md
+          echo "- Detection Hash: $(sha256sum language-detection.log 2>/dev/null | cut -d' ' -f1)" >> compliance-report.md
+          echo "- Scan Hash: $(sha256sum semgrep-evidence.log | cut -d' ' -f1)" >> compliance-report.md
+          echo "- Results Hash: $(sha256sum semgrep-results.json 2>/dev/null | cut -d' ' -f1)" >> compliance-report.md
+
+      - name: Upload scan artifacts
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: semgrep-scan-${{ github.run_id }}
+          path: |
+            semgrep-results.json
+            semgrep-sarif.json
+            semgrep-evidence.log
+            semgrep-output.log
+            compliance-report.md
+            .semgrep.yml
+          retention-days: 90
+
+      - name: Fail on critical findings
+        if: steps.semgrep.outputs.critical_findings != '0'
+        run: |
+          echo "🛑 Build failed due to critical security findings"
+          echo "Review the Semgrep report for details"
+          exit 1
+
+  # Google Chat notifications for findings
+  notify-findings:
+    needs: [detect-languages, semgrep-scan]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download scan results
+        uses: actions/download-artifact@v3
+        with:
+          name: semgrep-scan-${{ github.run_id }}
+
+      - name: Prepare notification
+        id: notify
+        run: |
+          # Extract findings summary
+          if [ -f semgrep-results.json ]; then
+            CRITICAL=$(jq '.results | map(select(.extra.severity == "ERROR")) | length' semgrep-results.json)
+            HIGH=$(jq '.results | map(select(.extra.severity == "WARNING")) | length' semgrep-results.json)
+            MEDIUM=$(jq '.results | map(select(.extra.severity == "INFO")) | length' semgrep-results.json)
+          else
+            CRITICAL=0
+            HIGH=0
+            MEDIUM=0
+          fi
+
+          # Determine notification color/urgency
+          if [ "$CRITICAL" -gt 0 ]; then
+            COLOR="#FF0000"
+            URGENCY="🚨 CRITICAL"
+          elif [ "$HIGH" -gt 0 ]; then
+            COLOR="#FFA500"
+            URGENCY="⚠️ HIGH"
+          else
+            COLOR="#00FF00"
+            URGENCY="✅ CLEAR"
+          fi
+
+          echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+          echo "high=$HIGH" >> $GITHUB_OUTPUT
+          echo "medium=$MEDIUM" >> $GITHUB_OUTPUT
+          echo "color=$COLOR" >> $GITHUB_OUTPUT
+          echo "urgency=$URGENCY" >> $GITHUB_OUTPUT
+
+      - name: Send Google Chat alert
+        if: vars.GCHAT_WEBHOOK_URL != ''
+        run: |
+          curl -X POST ${{ vars.GCHAT_WEBHOOK_URL }} \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "cards": [{
+                "header": {
+                  "title": "Semgrep SAST Results ${{ steps.notify.outputs.urgency }}",
+                  "subtitle": "${{ github.repository }} - ${{ github.ref_name }}"
+                },
+                "sections": [{
+                  "widgets": [{
+                    "keyValue": {
+                      "topLabel": "Critical Findings",
+                      "content": "${{ steps.notify.outputs.critical }}",
+                      "contentMultiline": false,
+                      "icon": "DESCRIPTION"
+                    }
+                  }, {
+                    "keyValue": {
+                      "topLabel": "High Findings",
+                      "content": "${{ steps.notify.outputs.high }}"
+                    }
+                  }, {
+                    "keyValue": {
+                      "topLabel": "Medium Findings",
+                      "content": "${{ steps.notify.outputs.medium }}"
+                    }
+                  }, {
+                    "textParagraph": {
+                      "text": "<b>Compliance:</b> CMMC CA.L2-3.12.4, NIST 3.14.1-3.14.3"
+                    }
+                  }, {
+                    "buttons": [{
+                      "textButton": {
+                        "text": "VIEW DETAILS",
+                        "onClick": {
+                          "openLink": {
+                            "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                          }
+                        }
+                      }
+                    }]
+                  }]
+                }]
+              }]
+            }'

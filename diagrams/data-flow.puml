@@ -1,0 +1,173 @@
+@startuml Data_Flow_Diagram
+!define ICONURL https://raw.githubusercontent.com/tupadr3/plantuml-icon-font-sprites/v2.4.0
+!include ICONURL/common.puml
+!include ICONURL/font-awesome-5/code_branch.puml
+!include ICONURL/font-awesome-5/lock.puml
+!include ICONURL/font-awesome-5/database.puml
+
+skinparam backgroundColor #FFFFFF
+skinparam actorBackgroundColor #FAFAFA
+skinparam rectangleBackgroundColor #E3F2FD
+skinparam databaseBackgroundColor #E8F5E9
+skinparam cloudBackgroundColor #FFF9C4
+skinparam arrowColor #1976D2
+
+title Data Flow Diagram - Gitea DevSecOps Platform\nNIST SP 800-171 Rev. 2 Compliant | CMMC 2.0 Level 2
+
+actor "Developer\n(A-1)" as DEV
+actor "Administrator\n(A-1)" as ADMIN
+
+' Application Layer
+rectangle "A-6: Gitea\n[CUI]\nSource Repository" as GITEA <<CUI>> #1E88E5
+rectangle "A-7: n8n\n[SPA]\nWorkflow Engine" as N8N <<SPA>>
+rectangle "A-8: SonarQube\n[SPA]\nSAST Platform" as SONAR <<SPA>>
+rectangle "A-9: Prometheus\n[SPA]\nMetrics Collection" as PROM <<SPA>>
+rectangle "A-10: Grafana\n[SPA]\nVisualization" as GRAF <<SPA>>
+
+' Data Stores
+database "S-1: Gitea DB\n[CUI]\nAES-256-GCM" as GITEADB <<CUI>> #43A047
+database "S-2: Sonar DB\n[SPA]\nAES-256-GCM" as SONARDB <<SPA>>
+database "S-3: n8n DB\n[SPA]\nAES-256-GCM" as N8NDB <<SPA>>
+database "S-4: Prom TSDB\n[SPA]" as PROMDB <<SPA>>
+
+' Security Scanners
+rectangle "A-11: Trivy\n[SPC]\nContainer CVE" as TRIVY <<SPC>> #7B1FA2
+rectangle "A-12: Grype\n[SPC]\nSBOM Analysis" as GRYPE <<SPC>> #7B1FA2
+rectangle "A-13: Semgrep\n[SPC]\nSAST Rules" as SEMGREP <<SPC>> #7B1FA2
+rectangle "A-14: Checkov\n[SPC]\nIaC Security" as CHECKOV <<SPC>> #7B1FA2
+rectangle "A-15: tfsec\n[SPC]\nTF Security" as TFSEC <<SPC>> #7B1FA2
+rectangle "A-16: Terrascan\n[SPC]\nCompliance" as TERRASCAN <<SPC>> #7B1FA2
+rectangle "A-17: Infracost\n[SPC]\nCost Analysis" as INFRACOST <<SPC>> #7B1FA2
+
+' GCP Services
+database "S-5: GCS Evidence\n[CRMA]\nImmutable\n7-Year Retention" as GCS <<CRMA>> #2E7D32
+cloud "A-18: Security\nCommand Center" as SCC
+cloud "A-19: Cloud Asset\nInventory" as CAI
+cloud "A-20: Cloud Logging" as LOGGING
+cloud "A-21: Google Chat" as CHAT
+cloud "A-2: CVE Databases" as CVEDB
+
+/'
+  FLOW 1: CODE COMMIT AND SECURITY SCANNING
+'/
+DEV -down-> GITEA : **F-1**: Git Push\nSSH/22, Public Key\n[CUI: Source Code]
+GITEA -down-> GITEADB : **F-11**: Store Code\nPostgreSQL/5432\nTLS + Cert\n[CUI: Repositories]
+GITEA -right-> N8N : **F-15**: Webhook\nHTTP POST\nHMAC-SHA256\n[Event Metadata]
+
+N8N -down-> TRIVY : **F-21**: Spawn Scanner\nDocker Socket\n[CUI: Code Snapshot]
+N8N -down-> GRYPE : **F-22**: Spawn Scanner\nDocker Socket\n[CUI: Code Snapshot]
+N8N -down-> SEMGREP : **F-23**: Spawn Scanner\nDocker Socket\n[CUI: Code Snapshot]
+
+TRIVY -up-> CVEDB : **F-28**: Update DB\nHTTPS/443, TLS 1.3\n[CVE Signatures]
+GRYPE -up-> CVEDB : **F-29**: Update DB\nHTTPS/443, TLS 1.3\n[CVE Signatures]
+
+TRIVY -up-> N8N : **F-36**: Results\nJSON\n[CUI: CVE List]
+GRYPE -up-> N8N : **F-37**: Results\nJSON\n[CUI: SBOM + CVEs]
+SEMGREP -up-> N8N : **F-38**: Results\nJSON\n[CUI: SAST Findings]
+
+/'
+  FLOW 2: SAST INTEGRATION
+'/
+N8N -right-> SONAR : **F-16**: Trigger Analysis\nHTTP/9000\nAPI Token\n[Project Key]
+SONAR -down-> SONARDB : **F-12**: Store Results\nPostgreSQL/5432\nTLS + Cert\n[CUI: Quality Metrics]
+SONAR -left-> N8N : **F-39**: Analysis Results\nHTTP/9000\nAPI Token\n[CUI: Code Issues]
+
+/'
+  FLOW 3: IAC SECURITY SCANNING
+'/
+DEV -down-> GITEA : **F-40**: TF Commit\nSSH/22, Public Key\n[CUI: IaC Files]
+GITEA -right-> N8N : **F-41**: Webhook\nHTTP POST\nHMAC-SHA256\n[IaC Event]
+
+N8N -down-> CHECKOV : **F-24**: Mount Files\nDocker Exec\nVolume Mount\n[CUI: TF Code]
+N8N -down-> TFSEC : **F-25**: Mount Files\nDocker Exec\nVolume Mount\n[CUI: TF Code]
+N8N -down-> TERRASCAN : **F-26**: Mount Files\nDocker Exec\nVolume Mount\n[CUI: TF Code]
+N8N -down-> INFRACOST : **F-27**: Mount Files\nDocker Exec\nVolume Mount\n[CUI: TF Code]
+
+CHECKOV -up-> N8N : **F-42**: Findings\nJSON\n[CUI: Policy Violations]
+TFSEC -up-> N8N : **F-43**: Findings\nJSON\n[CUI: Security Issues]
+TERRASCAN -up-> N8N : **F-44**: Findings\nJSON\n[CUI: Compliance Gaps]
+INFRACOST -up-> N8N : **F-45**: Cost Analysis\nJSON\n[Cost Breakdown]
+
+/'
+  FLOW 4: EVIDENCE COLLECTION
+'/
+note right of N8N
+  **F-46**: Hash Evidence
+  SHA-256 In-Process
+  [CUI: Scan Results]
+
+  **F-47**: Map to Controls
+  NIST 800-171 Mapping
+  [CUI: Control Evidence]
+end note
+
+N8N -right-> GCS : **F-30**: Upload Evidence\nHTTPS/443\nOAuth2 SA\nAES-256-GCM\n[CUI: Evidence Package]
+N8N -right-> GCS : **F-48**: Upload Control Map\nHTTPS/443\nOAuth2 SA\nAES-256-GCM\n[CUI: Compliance Manifest]
+N8N -down-> N8NDB : **F-13**: Store Workflow State\nPostgreSQL/5432\nTLS + Cert\n[SPA: Execution Logs]
+
+/'
+  FLOW 5: GCP SECURITY INTEGRATION
+'/
+N8N -right-> SCC : **F-31**: Query Findings\nHTTPS/443\nOAuth2 SA\nTLS 1.3\n[Finding Queries]
+N8N -right-> CAI : **F-32**: Discover Assets\nHTTPS/443\nOAuth2 SA\nTLS 1.3\n[Asset Queries]
+SCC -left-> N8N : **F-35**: Push Findings\nPub/Sub HTTPS/443\nJWT Auth\n[CUI: Security Findings]
+
+/'
+  FLOW 6: AUDIT LOGGING
+'/
+N8N -right-> LOGGING : **F-33**: Audit Logs\nHTTPS/443\nOAuth2 SA\nTLS 1.3\n[CUI: Audit Events]
+GITEA -right-> LOGGING : **F-49**: Audit Logs\nHTTPS/443\nOAuth2 SA\nTLS 1.3\n[CUI: Access Events]
+
+/'
+  FLOW 7: NOTIFICATIONS
+'/
+N8N -right-> CHAT : **F-34**: Send Alert\nHTTPS/443\nWebhook Secret\nTLS 1.3\n[Alert Summary]
+
+/'
+  FLOW 8: MONITORING
+'/
+PROM -up-> GITEA : **F-17**: Scrape Metrics\nHTTP/9090\nService Discovery\n[Gitea Metrics]
+PROM -up-> N8N : **F-18**: Scrape Metrics\nHTTP/5678\nService Discovery\n[n8n Metrics]
+PROM -up-> SONAR : **F-19**: Scrape Metrics\nHTTP/9000\nService Discovery\n[Sonar Metrics]
+PROM -down-> PROMDB : **F-14**: Store Metrics\nLocal Write\nProcess Isolation\n[SPA: Time Series]
+
+ADMIN -down-> GRAF : **F-50**: View Dashboard\nHTTPS/443\nOAuth2 + MFA\nTLS 1.3\n[Visualizations]
+GRAF -down-> PROM : **F-20**: Query Metrics\nHTTP/9090\nToken Auth\n[PromQL Queries]
+
+/'
+  FLOW 9: ADMIN ACCESS
+'/
+ADMIN -down-> GITEA : **F-51**: Admin Console\nSSH via VPN\nCert Auth + MFA\n[CUI: Config Changes]
+ADMIN -down-> N8N : **F-52**: Admin Console\nSSH via VPN\nCert Auth + MFA\n[SPA: Workflow Config]
+
+legend right
+  |= Flow Type |= Protocol |= Encryption |= Auth Method |= Data Classification |
+  | Git Operations | SSH/22 | Public Key Crypto | PKI | [CUI] |
+  | Web Traffic | HTTPS/443 | TLS 1.3 | OAuth2, MFA | [CUI], [SPA] |
+  | Database | PostgreSQL/5432 | TLS + Cert | Password + Cert | [CUI], [SPA] |
+  | Internal API | HTTP/Internal | In-Transit Only | API Token, HMAC | [SPA] |
+  | GCP Services | HTTPS/443 | TLS 1.3 | Service Account OAuth2 | [CUI], [CRMA] |
+  | Container Ops | Docker Socket | Unix Domain | Process Isolation | [CUI] |
+  | Metrics | HTTP/9090 | None (Internal) | Service Discovery | [SPA] |
+
+  **Data at Rest Encryption:**
+  - PostgreSQL: AES-256-GCM (LUKS volumes)
+  - GCS: CMEK AES-256-GCM (Customer-Managed Keys)
+  - Prometheus TSDB: Local encrypted volume
+
+  **NIST SP 800-171 Rev. 2 Control Coverage:**
+  - §3.1.1: Access Control - All authenticated flows
+  - §3.13.8: Transmission Confidentiality - TLS 1.3
+  - §3.13.11: Cryptographic Protection - AES-256-GCM
+  - §3.13.16: Data at Rest - Encrypted databases
+  - §3.3.1: Audit Record Creation - F-33, F-49
+  - §3.14.6: Event Logging - Cloud Logging integration
+
+  **CMMC 2.0 Practice Mapping:**
+  - AC.L2-3.1.1: Authorized Access Control
+  - AU.L2-3.3.1: System Audit Logging
+  - SC.L2-3.13.8: Transmission Confidentiality
+  - SC.L2-3.13.11: Cryptographic Mechanisms
+endlegend
+
+@enduml

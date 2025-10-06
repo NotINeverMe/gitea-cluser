@@ -1,0 +1,93 @@
+# Caddyfile for Gitea with TLS termination
+# Handles HTTPS, HTTP/2, and automatic certificate management
+
+# ============================================================================
+# GITEA MAIN SERVICE
+# ============================================================================
+
+{$GITEA_DOMAIN:localhost} {
+    # Automatic HTTPS with Let's Encrypt (production)
+    # Comment out for development or self-signed certs
+    # tls {
+    #     email {$GITEA_ADMIN_EMAIL}
+    # }
+
+    # Development mode - self-signed cert
+    tls internal
+
+    # Security headers
+    header {
+        # HSTS (1 year)
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+
+        # Prevent MIME sniffing
+        X-Content-Type-Options "nosniff"
+
+        # XSS protection
+        X-XSS-Protection "1; mode=block"
+
+        # Clickjacking protection
+        X-Frame-Options "SAMEORIGIN"
+
+        # Remove server header
+        -Server
+
+        # CSP (adjust as needed)
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
+    }
+
+    # Logging
+    log {
+        output file /var/log/caddy/gitea-access.log {
+            roll_size 100MB
+            roll_keep 10
+            roll_keep_for 90d
+        }
+        format json
+        level INFO
+    }
+
+    # Reverse proxy to Gitea
+    reverse_proxy gitea:3000 {
+        # Health check
+        health_uri /api/healthz
+        health_interval 30s
+        health_timeout 10s
+
+        # Preserve original headers
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+
+        # Timeouts
+        transport http {
+            read_timeout 300s
+            write_timeout 300s
+            dial_timeout 10s
+        }
+    }
+
+    # Large file upload support (for Git LFS)
+    request_body {
+        max_size 500MB
+    }
+}
+
+# ============================================================================
+# HTTP to HTTPS REDIRECT
+# ============================================================================
+
+http://{$GITEA_DOMAIN:localhost} {
+    redir https://{host}{uri} permanent
+}
+
+# ============================================================================
+# HEALTH CHECK ENDPOINT (no auth required)
+# ============================================================================
+
+:8080 {
+    respond /health 200 {
+        body "OK"
+    }
+}

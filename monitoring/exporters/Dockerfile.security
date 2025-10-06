@@ -1,0 +1,42 @@
+# Security Scan Exporter Dockerfile
+# CMMC 2.0: RA.L2-3.11.2 - Vulnerability Scanning
+# NIST SP 800-53: RA-5 - Vulnerability Scanning
+
+FROM python:3.11-slim
+
+# Install dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r exporter && useradd -r -g exporter exporter
+
+# Set working directory
+WORKDIR /app
+
+# Create scan results directory
+RUN mkdir -p /app/scan-results && chown -R exporter:exporter /app/scan-results
+
+# Copy requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy exporter script
+COPY security-scan-exporter.py .
+RUN chmod +x security-scan-exporter.py
+
+# Switch to non-root user
+USER exporter
+
+# Expose metrics port
+EXPOSE 9201
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:9201/metrics || exit 1
+
+# Run exporter
+CMD ["python", "-u", "security-scan-exporter.py"]

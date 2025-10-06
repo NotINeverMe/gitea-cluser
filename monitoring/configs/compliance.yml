@@ -1,0 +1,174 @@
+# Compliance Configuration
+# CMMC 2.0 and NIST SP 800-171/800-53 Controls
+
+frameworks:
+  cmmc:
+    level: 2
+    domains:
+      - AC  # Access Control
+      - AU  # Audit and Accountability
+      - AT  # Awareness and Training
+      - CM  # Configuration Management
+      - IA  # Identification and Authentication
+      - IR  # Incident Response
+      - MA  # Maintenance
+      - MP  # Media Protection
+      - PE  # Physical Protection
+      - PS  # Personnel Security
+      - RA  # Risk Assessment
+      - CA  # Security Assessment
+      - SC  # System and Communications Protection
+      - SI  # System and Information Integrity
+      - SR  # Supply Chain Risk Management
+
+  nist_800_171:
+    version: "Rev 2"
+    families:
+      - "3.1"   # Access Control
+      - "3.2"   # Awareness and Training
+      - "3.3"   # Audit and Accountability
+      - "3.4"   # Configuration Management
+      - "3.5"   # Identification and Authentication
+      - "3.6"   # Incident Response
+      - "3.7"   # Maintenance
+      - "3.8"   # Media Protection
+      - "3.9"   # Personnel Security
+      - "3.10"  # Physical Protection
+      - "3.11"  # Risk Assessment
+      - "3.12"  # Security Assessment
+      - "3.13"  # System and Communications Protection
+      - "3.14"  # System and Information Integrity
+
+  nist_800_53:
+    revision: 5
+    families:
+      - AC  # Access Control
+      - AU  # Audit and Accountability
+      - AT  # Awareness and Training
+      - CM  # Configuration Management
+      - CP  # Contingency Planning
+      - IA  # Identification and Authentication
+      - IR  # Incident Response
+      - MA  # Maintenance
+      - MP  # Media Protection
+      - PE  # Physical and Environmental Protection
+      - PL  # Planning
+      - PM  # Program Management
+      - PS  # Personnel Security
+      - PT  # PII Processing and Transparency
+      - RA  # Risk Assessment
+      - CA  # Assessment, Authorization, and Monitoring
+      - SC  # System and Communications Protection
+      - SI  # System and Information Integrity
+      - SR  # Supply Chain Risk Management
+      - SA  # System and Services Acquisition
+
+policies:
+  password_policy:
+    min_length: 14
+    complexity: true
+    uppercase: true
+    lowercase: true
+    numbers: true
+    special_chars: true
+    max_age_days: 90
+    min_age_days: 1
+    history_count: 24
+    lockout_attempts: 5
+    lockout_duration_minutes: 30
+
+  access_review:
+    standard_frequency_days: 90
+    privileged_frequency_days: 30
+    service_account_frequency_days: 180
+    inactive_account_days: 90
+    disable_after_days: 120
+    remove_after_days: 365
+
+  vulnerability_remediation:
+    critical_sla_days: 7
+    high_sla_days: 30
+    medium_sla_days: 90
+    low_sla_days: 180
+    zero_day_sla_hours: 24
+    emergency_patch_hours: 72
+
+  backup:
+    frequency_hours: 24
+    retention_days: 90
+    offsite_required: true
+    encryption_required: true
+    test_restore_frequency_days: 30
+    immutable_backup_days: 7
+
+  audit_log:
+    retention_days: 90
+    archive_retention_years: 7
+    tamper_protection: true
+    centralized_logging: true
+    real_time_alerting: true
+    log_types:
+      - authentication
+      - authorization
+      - system_changes
+      - data_access
+      - security_events
+      - administrative_actions
+
+  encryption:
+    data_at_rest:
+      algorithm: "AES-256"
+      key_rotation_days: 365
+    data_in_transit:
+      min_tls_version: "1.2"
+      cipher_suites:
+        - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+        - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+    key_management:
+      hsm_required: false
+      key_escrow: true
+      split_knowledge: true
+
+  incident_response:
+    detection_time_minutes: 15
+    triage_time_minutes: 30
+    containment_time_hours: 4
+    eradication_time_hours: 24
+    recovery_time_hours: 48
+    lessons_learned_days: 14
+
+  change_management:
+    approval_required: true
+    testing_required: true
+    rollback_plan_required: true
+    impact_analysis_required: true
+    security_review_required: true
+    documentation_required: true
+
+  network_security:
+    firewall_review_days: 90
+    ids_ips_enabled: true
+    network_segmentation: true
+    zero_trust_architecture: false
+    vpn_required: true
+    nat_gateway: true
+
+assessment_criteria:
+  cmmc_level_2:
+    min_score: 110
+    max_score: 110
+    passing_score: 110
+    remediation_allowed: false
+    pod_allowed: true
+    pod_max_score: 3
+
+  nist_800_171:
+    total_controls: 110
+    required_controls: 110
+    min_implementation_percent: 100
+
+  nist_800_53:
+    baseline: "moderate"
+    tailoring_allowed: true
+    compensating_controls_allowed: true
+    continuous_monitoring_required: true

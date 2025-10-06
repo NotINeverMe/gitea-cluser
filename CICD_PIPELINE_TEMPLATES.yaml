@@ -1,0 +1,560 @@
+# DevSecOps CI/CD Pipeline Templates with Security Gates
+# Compatible with Gitea Actions, Drone CI, and Woodpecker CI
+
+---
+# TERRAFORM INFRASTRUCTURE PIPELINE
+name: terraform-security-pipeline
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/terraform.yml'
+  pull_request:
+    paths:
+      - 'terraform/**'
+
+env:
+  TF_VERSION: "1.5.7"
+  CHECKOV_VERSION: "2.4.9"
+  TFSEC_VERSION: "1.28.1"
+  TERRASCAN_VERSION: "1.18.3"
+  INFRACOST_VERSION: "0.10.29"
+
+jobs:
+  # STAGE 1: PRE-COMMIT VALIDATION
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Secret Scanning
+        run: |
+          # Install git-secrets
+          git clone https://github.com/awslabs/git-secrets.git
+          cd git-secrets && make install
+          git secrets --register-aws
+          git secrets --scan
+
+      - name: Terraform Format Check
+        run: |
+          terraform fmt -check -recursive
+          if [ $? -ne 0 ]; then
+            echo "::error::Terraform files are not properly formatted"
+            exit 1
+          fi
+
+      - name: Terraform Validate
+        run: |
+          for dir in $(find . -name "*.tf" -exec dirname {} \; | sort -u); do
+            echo "Validating $dir"
+            terraform -chdir=$dir init -backend=false
+            terraform -chdir=$dir validate
+          done
+
+  # STAGE 2: STATIC SECURITY ANALYSIS
+  security-scanning:
+    needs: pre-commit
+    runs-on: ubuntu-latest
+    container:
+      image: bridgecrew/checkov:${{ env.CHECKOV_VERSION }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Checkov Scan
+        id: checkov
+        run: |
+          checkov -d terraform/ \
+            --framework terraform \
+            --output json \
+            --output-file-path checkov-report.json \
+            --quiet \
+            --skip-check CKV_GCP_* \
+            --external-checks-dir ./policies/checkov
+
+      - name: tfsec Analysis
+        run: |
+          wget -q https://github.com/aquasecurity/tfsec/releases/download/v${{ env.TFSEC_VERSION }}/tfsec-linux-amd64
+          chmod +x tfsec-linux-amd64
+          ./tfsec-linux-amd64 terraform/ \
+            --format json \
+            --out tfsec-report.json \
+            --exclude-downloaded-modules \
+            --minimum-severity MEDIUM
+
+      - name: Terrascan Policy Check
+        run: |
+          docker run --rm -v $(pwd):/src \
+            accurics/terrascan:${{ env.TERRASCAN_VERSION }} \
+            scan -t gcp -i terraform \
+            -d /src/terraform \
+            --output json \
+            --config-path /src/policies/terrascan.toml > terrascan-report.json
+
+      - name: Security Gate Decision
+        run: |
+          # Parse and evaluate security findings
+          CRITICAL=$(jq '.results.failed_checks | map(select(.check_type == "CRITICAL")) | length' checkov-report.json)
+          HIGH=$(jq '.results.failed_checks | map(select(.check_type == "HIGH")) | length' checkov-report.json)
+
+          if [ $CRITICAL -gt 0 ]; then
+            echo "::error::Critical security issues found. Pipeline blocked."
+            exit 1
+          elif [ $HIGH -gt 5 ]; then
+            echo "::warning::Too many high severity issues. Manual review required."
+            exit 1
+          fi
+
+  # STAGE 3: COST ANALYSIS
+  cost-estimation:
+    needs: security-scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Infracost
+        uses: infracost/setup-infracost-action@v2
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Generate Cost Estimate
+        run: |
+          infracost breakdown \
+            --path terraform/ \
+            --format json \
+            --out-file infracost-report.json
+
+      - name: Cost Gate Check
+        run: |
+          MONTHLY_COST=$(jq '.projects[0].breakdown.totalMonthlyCost' infracost-report.json)
+          BUDGET_LIMIT=10000
+
+          if (( $(echo "$MONTHLY_COST > $BUDGET_LIMIT" | bc -l) )); then
+            echo "::error::Estimated cost ($MONTHLY_COST) exceeds budget limit ($BUDGET_LIMIT)"
+            exit 1
+          fi
+
+  # STAGE 4: PLAN AND REVIEW
+  terraform-plan:
+    needs: [security-scanning, cost-estimation]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure GCP Credentials
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform init
+          terraform plan -out=tfplan.binary
+          terraform show -json tfplan.binary > tfplan.json
+
+      - name: Post-Plan Security Check
+        run: |
+          # Check for resource deletions
+          DELETIONS=$(jq '[.resource_changes[] | select(.change.actions[] == "delete")] | length' tfplan.json)
+          if [ $DELETIONS -gt 0 ]; then
+            echo "::warning::Plan contains $DELETIONS resource deletions"
+          fi
+
+          # Check for security group changes
+          SG_CHANGES=$(jq '[.resource_changes[] | select(.type == "google_compute_firewall")] | length' tfplan.json)
+          if [ $SG_CHANGES -gt 0 ]; then
+            echo "::warning::Plan modifies $SG_CHANGES firewall rules"
+          fi
+
+      - name: Upload Plan Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plans
+          path: |
+            tfplan.binary
+            tfplan.json
+            *-report.json
+
+  # STAGE 5: APPROVAL GATE (for production)
+  approval-gate:
+    needs: terraform-plan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://gitea.example.com
+    steps:
+      - name: Request Approval
+        run: |
+          echo "Waiting for manual approval for production deployment"
+          # Integration with Atlantis for PR-based approval
+
+  # STAGE 6: APPLY WITH MONITORING
+  terraform-apply:
+    needs: approval-gate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Plan
+        uses: actions/download-artifact@v3
+        with:
+          name: terraform-plans
+
+      - name: Apply Terraform
+        run: |
+          terraform init
+          terraform apply tfplan.binary
+
+      - name: Post-Deployment Validation
+        run: |
+          # Verify resources created
+          terraform output -json > outputs.json
+
+          # Trigger smoke tests
+          curl -X POST https://monitoring.example.com/api/v1/test \
+            -H "Content-Type: application/json" \
+            -d @outputs.json
+
+---
+# PACKER IMAGE PIPELINE
+name: packer-secure-build
+on:
+  push:
+    paths:
+      - 'packer/**'
+      - '.github/workflows/packer.yml'
+
+env:
+  PACKER_VERSION: "1.9.4"
+  ANSIBLE_VERSION: "2.15.5"
+
+jobs:
+  # STAGE 1: PACKER VALIDATION
+  validate-packer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@v2
+        with:
+          packer-version: ${{ env.PACKER_VERSION }}
+
+      - name: Validate Templates
+        run: |
+          for template in packer/*.pkr.hcl; do
+            packer validate $template
+          done
+
+      - name: Format Check
+        run: |
+          packer fmt -check packer/
+
+  # STAGE 2: ANSIBLE SECURITY
+  ansible-security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install ansible-lint
+        run: |
+          pip install ansible-lint==${{ env.ANSIBLE_VERSION }}
+
+      - name: Lint Ansible Playbooks
+        run: |
+          ansible-lint ansible/playbooks/*.yml \
+            --config-file ansible/.ansible-lint \
+            --format json > ansible-lint-report.json
+
+      - name: Security Hardening Check
+        run: |
+          # Verify CIS benchmarks are applied
+          grep -r "cis_" ansible/roles/ || exit 1
+
+          # Check for password policies
+          grep -r "password_" ansible/roles/ || exit 1
+
+  # STAGE 3: BUILD IMAGE
+  build-image:
+    needs: [validate-packer, ansible-security]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build with Packer
+        run: |
+          packer build \
+            -var "project_id=${{ secrets.GCP_PROJECT }}" \
+            -var "zone=us-central1-a" \
+            -var "image_family=hardened-ubuntu" \
+            -var "image_name=ubuntu-2204-$(date +%Y%m%d-%H%M%S)" \
+            packer/ubuntu-hardened.pkr.hcl
+
+      - name: Export Image Manifest
+        id: manifest
+        run: |
+          echo "image_id=$(packer build -machine-readable packer/ubuntu-hardened.pkr.hcl | grep 'artifact,0,id' | cut -d',' -f6)" >> $GITHUB_OUTPUT
+
+  # STAGE 4: IMAGE SCANNING
+  scan-image:
+    needs: build-image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull Built Image
+        run: |
+          gcloud compute images describe ${{ steps.manifest.outputs.image_id }} \
+            --format="get(selfLink)" > image-url.txt
+
+      - name: Trivy Scan
+        run: |
+          trivy image \
+            --severity CRITICAL,HIGH,MEDIUM \
+            --format json \
+            --output trivy-image-report.json \
+            gcr.io/${{ secrets.GCP_PROJECT }}/${{ steps.manifest.outputs.image_id }}
+
+      - name: Grype Vulnerability Check
+        run: |
+          grype gcr.io/${{ secrets.GCP_PROJECT }}/${{ steps.manifest.outputs.image_id }} \
+            --output json \
+            --file grype-image-report.json \
+            --fail-on high
+
+      - name: Image Security Gate
+        run: |
+          VULNS=$(jq '.Results[0].Vulnerabilities | length' trivy-image-report.json)
+          if [ $VULNS -gt 10 ]; then
+            echo "::error::Image has too many vulnerabilities ($VULNS)"
+            exit 1
+          fi
+
+  # STAGE 5: SIGN AND PUBLISH
+  sign-publish:
+    needs: scan-image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign Image
+        run: |
+          cosign sign \
+            --key cosign.key \
+            gcr.io/${{ secrets.GCP_PROJECT }}/${{ steps.manifest.outputs.image_id }}
+
+      - name: Generate SBOM
+        run: |
+          syft gcr.io/${{ secrets.GCP_PROJECT }}/${{ steps.manifest.outputs.image_id }} \
+            -o spdx-json > sbom.json
+
+      - name: Attest SBOM
+        run: |
+          cosign attest \
+            --predicate sbom.json \
+            --key cosign.key \
+            gcr.io/${{ secrets.GCP_PROJECT }}/${{ steps.manifest.outputs.image_id }}
+
+      - name: Update Image Registry
+        run: |
+          # Update image metadata
+          gcloud compute images update ${{ steps.manifest.outputs.image_id }} \
+            --update-labels="scanned=true,signed=true,sbom=available"
+
+---
+# CONTAINER APPLICATION PIPELINE
+name: container-security-pipeline
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'Dockerfile'
+      - '.github/workflows/container.yml'
+
+jobs:
+  # STAGE 1: SOURCE CODE SECURITY
+  code-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: src/
+          args: >
+            -Dsonar.projectKey=devsecops-platform
+            -Dsonar.sources=.
+            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
+            -Dsonar.qualitygate.wait=true
+
+      - name: Semgrep Analysis
+        run: |
+          pip install semgrep
+          semgrep --config=auto \
+            --json \
+            --output=semgrep-report.json \
+            src/
+
+      - name: Dependency Check
+        run: |
+          # OWASP Dependency Check
+          docker run --rm \
+            -v $(pwd):/src \
+            owasp/dependency-check \
+            --scan /src \
+            --format JSON \
+            --out /src/dependency-check-report.json
+
+  # STAGE 2: BUILD CONTAINER
+  build-container:
+    needs: code-analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build Container
+        id: build
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./Dockerfile
+          tags: |
+            gcr.io/${{ secrets.GCP_PROJECT }}/app:${{ github.sha }}
+            gcr.io/${{ secrets.GCP_PROJECT }}/app:latest
+          cache-from: type=registry,ref=gcr.io/${{ secrets.GCP_PROJECT }}/app:buildcache
+          cache-to: type=registry,ref=gcr.io/${{ secrets.GCP_PROJECT }}/app:buildcache,mode=max
+          push: false
+          outputs: type=docker,dest=/tmp/image.tar
+
+      - name: Upload Image Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: container-image
+          path: /tmp/image.tar
+
+  # STAGE 3: CONTAINER SCANNING
+  scan-container:
+    needs: build-container
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Image
+        uses: actions/download-artifact@v3
+        with:
+          name: container-image
+          path: /tmp
+
+      - name: Load Image
+        run: |
+          docker load --input /tmp/image.tar
+
+      - name: Trivy Container Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: gcr.io/${{ secrets.GCP_PROJECT }}/app:${{ github.sha }}
+          format: 'json'
+          output: 'trivy-container-report.json'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '1'
+
+      - name: Grype Scan
+        run: |
+          grype gcr.io/${{ secrets.GCP_PROJECT }}/app:${{ github.sha }} \
+            --output json \
+            --file grype-container-report.json
+
+      - name: Container Security Gate
+        run: |
+          # Parse vulnerability counts
+          CRITICAL=$(jq '[.Results[].Vulnerabilities[] | select(.Severity == "CRITICAL")] | length' trivy-container-report.json)
+          HIGH=$(jq '[.Results[].Vulnerabilities[] | select(.Severity == "HIGH")] | length' trivy-container-report.json)
+
+          if [ $CRITICAL -gt 0 ]; then
+            echo "::error::Container has $CRITICAL critical vulnerabilities"
+            exit 1
+          elif [ $HIGH -gt 5 ]; then
+            echo "::warning::Container has $HIGH high vulnerabilities"
+            exit 1
+          fi
+
+  # STAGE 4: DYNAMIC TESTING
+  dynamic-testing:
+    needs: scan-container
+    runs-on: ubuntu-latest
+    services:
+      app:
+        image: gcr.io/${{ secrets.GCP_PROJECT }}/app:${{ github.sha }}
+        ports:
+          - 8080:8080
+    steps:
+      - name: Wait for Service
+        run: |
+          timeout 60 bash -c 'until curl -f http://localhost:8080/health; do sleep 2; done'
+
+      - name: OWASP ZAP Scan
+        run: |
+          docker run --rm \
+            --network host \
+            -v $(pwd):/zap/wrk:rw \
+            owasp/zap2docker-stable \
+            zap-baseline.py \
+            -t http://localhost:8080 \
+            -J zap-report.json \
+            -r zap-report.html
+
+      - name: Nuclei Scan
+        run: |
+          docker run --rm \
+            --network host \
+            -v $(pwd):/data \
+            projectdiscovery/nuclei \
+            -u http://localhost:8080 \
+            -json \
+            -o /data/nuclei-report.json
+
+  # STAGE 5: SIGN AND DEPLOY
+  deploy:
+    needs: [scan-container, dynamic-testing]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Push to Registry
+        run: |
+          docker push gcr.io/${{ secrets.GCP_PROJECT }}/app:${{ github.sha }}
+          docker push gcr.io/${{ secrets.GCP_PROJECT }}/app:latest
+
+      - name: Sign Container
+        run: |
+          cosign sign \
+            --key cosign.key \
+            gcr.io/${{ secrets.GCP_PROJECT }}/app:${{ github.sha }}
+
+      - name: Generate and Attest SBOM
+        run: |
+          syft gcr.io/${{ secrets.GCP_PROJECT }}/app:${{ github.sha }} \
+            -o spdx-json > container-sbom.json
+
+          cosign attest \
+            --predicate container-sbom.json \
+            --key cosign.key \
+            gcr.io/${{ secrets.GCP_PROJECT }}/app:${{ github.sha }}
+
+      - name: Deploy to GCP
+        run: |
+          gcloud run deploy app \
+            --image gcr.io/${{ secrets.GCP_PROJECT }}/app:${{ github.sha }} \
+            --platform managed \
+            --region us-central1 \
+            --binary-authorization=default
+
+      - name: Post-Deployment Verification
+        run: |
+          # Verify deployment
+          SERVICE_URL=$(gcloud run services describe app --region us-central1 --format='value(status.url)')
+          curl -f $SERVICE_URL/health || exit 1
+
+          # Trigger monitoring checks
+          curl -X POST https://monitoring.example.com/api/v1/verify \
+            -d "{\"service\": \"app\", \"url\": \"$SERVICE_URL\"}"

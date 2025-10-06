@@ -1,0 +1,209 @@
+# Prometheus Configuration
+# CMMC 2.0: AU.L2-3.3.1 - System auditing and logging
+# NIST SP 800-171: 3.3.1, 3.3.2 - Audit and accountability
+# NIST SP 800-53: AU-6 - Audit review, analysis, and reporting
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'devsecops-monitor'
+    environment: 'production'
+    compliance: 'cmmc-nist'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+      timeout: 10s
+      api_version: v2
+
+# Load rules once and periodically evaluate them according to the global 'evaluation_interval'
+rule_files:
+  - '/etc/prometheus/alerts/*.yml'
+  - '/etc/prometheus/rules/*.yml'
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'prometheus_tsdb_.*'
+        action: keep
+
+  # Node exporter for system metrics
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node_exporter:9100']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'monitoring-host'
+
+  # Gitea metrics
+  - job_name: 'gitea'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['gitea:3000']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'gitea'
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'gitea_.*'
+        action: keep
+
+  # SonarQube custom exporter
+  - job_name: 'sonarqube'
+    static_configs:
+      - targets: ['sonarqube_exporter:9200']
+    scrape_interval: 60s
+    scrape_timeout: 30s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'sonarqube_.*'
+        action: keep
+
+  # Security scan exporter (Trivy/Grype)
+  - job_name: 'security_scans'
+    static_configs:
+      - targets: ['security_scan_exporter:9201']
+    scrape_interval: 60s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'security_scan_.*'
+        action: keep
+
+  # Compliance metrics exporter
+  - job_name: 'compliance'
+    static_configs:
+      - targets: ['compliance_exporter:9202']
+    scrape_interval: 300s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'compliance_.*'
+        action: keep
+
+  # n8n workflow automation
+  - job_name: 'n8n'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['n8n:5678']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'n8n'
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'n8n_.*'
+        action: keep
+
+  # Trivy vulnerability scanner
+  - job_name: 'trivy'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['trivy:8080']
+    scrape_interval: 30s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'trivy_.*'
+        action: keep
+
+  # Atlantis GitOps
+  - job_name: 'atlantis'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['atlantis:4141']
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'atlantis_.*'
+        action: keep
+
+  # Blackbox exporter for endpoint monitoring
+  - job_name: 'blackbox_http'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - https://gitea.example.com
+          - https://sonarqube.example.com
+          - https://n8n.example.com
+          - https://grafana.example.com
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox_exporter:9115
+
+  # GCP Stackdriver metrics
+  - job_name: 'stackdriver'
+    static_configs:
+      - targets: ['stackdriver_exporter:9255']
+    scrape_interval: 60s
+    scrape_timeout: 55s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'stackdriver_.*'
+        action: keep
+
+  # Docker containers monitoring
+  - job_name: 'docker'
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 30s
+    relabel_configs:
+      - source_labels: [__meta_docker_container_label_prometheus_job]
+        target_label: job
+      - source_labels: [__meta_docker_container_name]
+        target_label: instance
+      - source_labels: [__meta_docker_container_label_compliance_cmmc]
+        target_label: cmmc_control
+      - source_labels: [__meta_docker_container_label_compliance_nist171]
+        target_label: nist171_control
+      - source_labels: [__meta_docker_container_label_compliance_nist53]
+        target_label: nist53_control
+
+  # JSON exporter for custom metrics
+  - job_name: 'json_metrics'
+    static_configs:
+      - targets: ['json_exporter:7979']
+    scrape_interval: 30s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'json_.*'
+        action: keep
+
+  # Grafana metrics
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'grafana_.*'
+        action: keep
+
+  # PostgreSQL exporter for Grafana database
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres_exporter:9187']
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'pg_.*'
+        action: keep
+
+  # Alertmanager metrics
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'alertmanager_.*'
+        action: keep

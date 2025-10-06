@@ -1,0 +1,178 @@
+# Compliance Alert Rules
+# CMMC 2.0: CA.L2-3.12.1, CA.L2-3.12.3 - Security Assessment
+# NIST SP 800-171: 3.12.1, 3.12.3 - Security Assessment
+# NIST SP 800-53: CA-2, CA-7 - Security Assessments and Continuous Monitoring
+
+groups:
+  - name: compliance_alerts
+    interval: 60s
+    rules:
+      # Evidence collection failure
+      - alert: EvidenceCollectionFailure
+        expr: |
+          compliance_evidence_collection_failures > 0
+        for: 15m
+        labels:
+          severity: critical
+          category: compliance
+          compliance: "CMMC:AU.L2-3.3.1,NIST171:3.3.1,NIST53:AU-3"
+        annotations:
+          summary: "Evidence collection failing for {{ $labels.control }}"
+          description: "Failed to collect evidence for control {{ $labels.control }} ({{ $labels.framework }})"
+          runbook_url: "https://docs.example.com/runbooks/evidence-collection"
+          evidence_path: "/compliance/evidence/{{ $labels.framework }}/{{ $labels.control }}"
+
+      # Audit log retention violation
+      - alert: AuditLogRetentionViolation
+        expr: |
+          prometheus_tsdb_retention_limit_seconds < 7776000  # Less than 90 days
+        for: 1h
+        labels:
+          severity: critical
+          category: compliance
+          compliance: "CMMC:AU.L2-3.3.1,NIST171:3.3.1,NIST53:AU-11"
+        annotations:
+          summary: "Audit log retention below compliance requirement"
+          description: "Retention is {{ $value | humanizeDuration }}, requires 90 days minimum"
+          runbook_url: "https://docs.example.com/runbooks/retention-policy"
+
+      # Control implementation missing
+      - alert: ControlImplementationMissing
+        expr: |
+          compliance_control_implemented{required="true"} == 0
+        for: 1h
+        labels:
+          severity: warning
+          category: compliance
+          compliance: "CMMC:CA.L2-3.12.1,NIST171:3.12.1"
+        annotations:
+          summary: "Required control {{ $labels.control_id }} not implemented"
+          description: "Control {{ $labels.control_id }} ({{ $labels.description }}) is required but not implemented"
+          dashboard_url: "https://grafana.example.com/d/compliance/compliance-metrics"
+
+      # Assessment readiness score low
+      - alert: LowAssessmentReadiness
+        expr: |
+          compliance_assessment_readiness_score < 70
+        for: 2h
+        labels:
+          severity: warning
+          category: compliance
+          compliance: "CMMC:CA.L2-3.12.4,NIST171:3.12.4"
+        annotations:
+          summary: "Assessment readiness score below threshold"
+          description: "Readiness score is {{ $value }}%, below 70% minimum for assessment"
+          runbook_url: "https://docs.example.com/runbooks/assessment-prep"
+
+      # Policy violation detected
+      - alert: PolicyViolationDetected
+        expr: |
+          increase(compliance_policy_violations_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          category: compliance
+          compliance: "CMMC:CA.L2-3.12.3,NIST171:3.12.3,NIST53:CA-7"
+        annotations:
+          summary: "Policy violation: {{ $labels.policy }}"
+          description: "{{ $value }} violations of {{ $labels.policy }} in the last hour"
+          runbook_url: "https://docs.example.com/runbooks/policy-violation"
+
+      # Evidence staleness
+      - alert: StaleComplianceEvidence
+        expr: |
+          (time() - compliance_evidence_last_updated) > 2592000  # 30 days
+        for: 1h
+        labels:
+          severity: warning
+          category: compliance
+          compliance: "CMMC:AU.L2-3.3.1,NIST171:3.3.1"
+        annotations:
+          summary: "Evidence for {{ $labels.control }} is stale"
+          description: "Evidence hasn't been updated in {{ $value | humanizeDuration }}"
+          runbook_url: "https://docs.example.com/runbooks/evidence-refresh"
+
+      # CMMC control gap
+      - alert: CMMCControlGap
+        expr: |
+          compliance_cmmc_control_gap > 0
+        for: 1h
+        labels:
+          severity: critical
+          category: compliance
+          compliance: "CMMC:ALL"
+        annotations:
+          summary: "CMMC control gap detected"
+          description: "{{ $value }} CMMC Level 2 controls are not fully implemented"
+          dashboard_url: "https://grafana.example.com/d/compliance/cmmc-dashboard"
+
+      # Backup compliance
+      - alert: BackupComplianceViolation
+        expr: |
+          time() - backup_last_successful_timestamp > 86400  # 24 hours
+        for: 1h
+        labels:
+          severity: critical
+          category: compliance
+          compliance: "CMMC:CP.L2-3.4.7,NIST171:3.4.7,NIST53:CP-9"
+        annotations:
+          summary: "Backup compliance violation for {{ $labels.system }}"
+          description: "Last successful backup was {{ $value | humanizeDuration }} ago"
+          runbook_url: "https://docs.example.com/runbooks/backup-compliance"
+
+      # Access review overdue
+      - alert: AccessReviewOverdue
+        expr: |
+          (time() - compliance_access_review_timestamp) > 7776000  # 90 days
+        for: 24h
+        labels:
+          severity: warning
+          category: compliance
+          compliance: "CMMC:AC.L2-3.1.3,NIST171:3.1.3,NIST53:AC-2"
+        annotations:
+          summary: "Access review overdue for {{ $labels.system }}"
+          description: "Last access review was {{ $value | humanizeDuration }} ago"
+          runbook_url: "https://docs.example.com/runbooks/access-review"
+
+      # Vulnerability remediation SLA
+      - alert: VulnerabilityRemediationSLABreach
+        expr: |
+          compliance_vulnerability_age_days{severity="critical"} > 7 or
+          compliance_vulnerability_age_days{severity="high"} > 30
+        for: 1h
+        labels:
+          severity: critical
+          category: compliance
+          compliance: "CMMC:SI.L2-3.14.1,NIST171:3.14.1,NIST53:SI-2"
+        annotations:
+          summary: "Vulnerability remediation SLA breach"
+          description: "{{ $labels.severity }} vulnerability in {{ $labels.component }} open for {{ $value }} days"
+          runbook_url: "https://docs.example.com/runbooks/vuln-remediation"
+
+      # Configuration drift
+      - alert: ConfigurationDriftDetected
+        expr: |
+          compliance_configuration_drift_detected > 0
+        for: 15m
+        labels:
+          severity: warning
+          category: compliance
+          compliance: "CMMC:CM.L2-3.4.1,NIST171:3.4.1,NIST53:CM-2"
+        annotations:
+          summary: "Configuration drift in {{ $labels.resource }}"
+          description: "{{ $value }} configuration items have drifted from baseline"
+          runbook_url: "https://docs.example.com/runbooks/config-drift"
+
+      # Encryption compliance
+      - alert: EncryptionComplianceViolation
+        expr: |
+          compliance_unencrypted_data_detected > 0
+        for: 5m
+        labels:
+          severity: critical
+          category: compliance
+          compliance: "CMMC:SC.L2-3.13.16,NIST171:3.13.16,NIST53:SC-28"
+        annotations:
+          summary: "Unencrypted sensitive data detected"
+          description: "{{ $value }} instances of unencrypted sensitive data found"
+          runbook_url: "https://docs.example.com/runbooks/encryption-compliance"

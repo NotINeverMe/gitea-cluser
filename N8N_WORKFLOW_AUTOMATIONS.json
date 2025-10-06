@@ -1,0 +1,481 @@
+{
+  "name": "DevSecOps Security and Compliance Automation",
+  "nodes": [
+    {
+      "id": "webhook_trigger",
+      "name": "Security Event Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [250, 300],
+      "parameters": {
+        "path": "security-events",
+        "method": "POST",
+        "authentication": "headerAuth",
+        "headerAuth": {
+          "name": "X-API-Key",
+          "value": "={{$credentials.apiKey}}"
+        }
+      }
+    },
+    {
+      "id": "event_classifier",
+      "name": "Classify Security Event",
+      "type": "n8n-nodes-base.switch",
+      "position": [450, 300],
+      "parameters": {
+        "dataPropertyName": "event_type",
+        "values": {
+          "string": [
+            {
+              "name": "vulnerability_detected",
+              "value": "vulnerability"
+            },
+            {
+              "name": "compliance_violation",
+              "value": "compliance"
+            },
+            {
+              "name": "security_gate_failed",
+              "value": "gate_failure"
+            },
+            {
+              "name": "incident_detected",
+              "value": "incident"
+            },
+            {
+              "name": "cost_threshold_exceeded",
+              "value": "cost_alert"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "vulnerability_handler",
+      "name": "Process Vulnerability",
+      "type": "n8n-nodes-base.function",
+      "position": [650, 100],
+      "parameters": {
+        "functionCode": "const severity = $input.item.json.severity;\nconst cve = $input.item.json.cve_id;\nconst affected_component = $input.item.json.component;\nconst scan_source = $input.item.json.scanner;\n\n// Determine response based on severity\nlet response_action = '';\nlet priority = '';\nlet sla_hours = 0;\n\nswitch(severity.toUpperCase()) {\n  case 'CRITICAL':\n    response_action = 'immediate_patch';\n    priority = 'P1';\n    sla_hours = 4;\n    break;\n  case 'HIGH':\n    response_action = 'expedited_patch';\n    priority = 'P2';\n    sla_hours = 24;\n    break;\n  case 'MEDIUM':\n    response_action = 'scheduled_patch';\n    priority = 'P3';\n    sla_hours = 72;\n    break;\n  case 'LOW':\n    response_action = 'next_maintenance';\n    priority = 'P4';\n    sla_hours = 168;\n    break;\n}\n\n// Check if CVE has known exploits\nconst known_exploits = await $http.get({\n  url: `https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=${cve}`,\n  headers: { 'Accept': 'application/json' }\n});\n\nconst has_exploit = known_exploits.vulnerabilities?.[0]?.cve?.references?.some(\n  ref => ref.tags?.includes('Exploit')\n) || false;\n\nif (has_exploit) {\n  priority = 'P1';\n  sla_hours = 2;\n  response_action = 'emergency_patch';\n}\n\nreturn {\n  json: {\n    ...$$input.item.json,\n    response_action,\n    priority,\n    sla_hours,\n    has_known_exploit: has_exploit,\n    ticket_required: severity === 'CRITICAL' || severity === 'HIGH',\n    automated_remediation: severity === 'LOW',\n    timestamp: new Date().toISOString()\n  }\n};"
+      }
+    },
+    {
+      "id": "create_jira_ticket",
+      "name": "Create JIRA Ticket",
+      "type": "n8n-nodes-base.jira",
+      "position": [850, 100],
+      "parameters": {
+        "operation": "create",
+        "project": "SECOPS",
+        "issueType": "Security Issue",
+        "summary": "{{$json.severity}} Vulnerability: {{$json.cve_id}} in {{$json.component}}",
+        "description": "Vulnerability Details:\n- CVE: {{$json.cve_id}}\n- Severity: {{$json.severity}}\n- Component: {{$json.component}}\n- Scanner: {{$json.scanner}}\n- Known Exploit: {{$json.has_known_exploit}}\n- SLA: {{$json.sla_hours}} hours\n- Action Required: {{$json.response_action}}",
+        "priority": "{{$json.priority}}",
+        "labels": ["security", "vulnerability", "{{$json.scanner}}"],
+        "customFields": {
+          "security_score": "{{$json.cvss_score}}",
+          "compliance_impact": "{{$json.compliance_controls}}"
+        }
+      }
+    },
+    {
+      "id": "compliance_handler",
+      "name": "Process Compliance Violation",
+      "type": "n8n-nodes-base.function",
+      "position": [650, 250],
+      "parameters": {
+        "functionCode": "const control_id = $input.item.json.control_id;\nconst framework = $input.item.json.framework; // CMMC, NIST, etc.\nconst violation_type = $input.item.json.violation_type;\nconst resource = $input.item.json.resource;\n\n// Map control to remediation actions\nconst control_remediations = {\n  'AC.L2-3.1.1': {\n    action: 'update_access_policy',\n    automation: 'terraform_apply',\n    template: 'rbac_policy.tf'\n  },\n  'AU.L2-3.3.1': {\n    action: 'enable_audit_logging',\n    automation: 'gcp_logging_api',\n    template: 'audit_policy.yaml'\n  },\n  'CM.L2-3.4.1': {\n    action: 'apply_baseline',\n    automation: 'ansible_playbook',\n    template: 'cis_baseline.yml'\n  },\n  'SC.L2-3.13.8': {\n    action: 'enable_encryption',\n    automation: 'kms_rotation',\n    template: 'encryption_policy.json'\n  }\n};\n\nconst remediation = control_remediations[control_id] || {\n  action: 'manual_review',\n  automation: 'none',\n  template: 'manual_process'\n};\n\n// Generate evidence for compliance\nconst evidence = {\n  timestamp: new Date().toISOString(),\n  control_id,\n  framework,\n  violation_type,\n  resource,\n  detection_method: $input.item.json.scanner || 'automated_scan',\n  remediation_applied: remediation.automation !== 'none'\n};\n\n// Calculate compliance impact\nconst impact_score = violation_type === 'missing_control' ? 10 : \n                    violation_type === 'partial_implementation' ? 5 : 2;\n\nreturn {\n  json: {\n    ...$$input.item.json,\n    remediation,\n    evidence,\n    impact_score,\n    requires_attestation: impact_score >= 5,\n    auto_remediate: remediation.automation !== 'none' && impact_score < 5\n  }\n};"
+      }
+    },
+    {
+      "id": "apply_remediation",
+      "name": "Auto-Remediate",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [850, 250],
+      "parameters": {
+        "method": "POST",
+        "url": "https://automation.example.com/api/remediate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "jsonParameters": true,
+        "options": {
+          "bodyContentType": "json"
+        },
+        "bodyParametersJson": "{\n  \"action\": \"{{$json.remediation.action}}\",\n  \"template\": \"{{$json.remediation.template}}\",\n  \"resource\": \"{{$json.resource}}\",\n  \"control\": \"{{$json.control_id}}\",\n  \"evidence\": {{JSON.stringify($json.evidence)}}\n}"
+      }
+    },
+    {
+      "id": "gate_failure_handler",
+      "name": "Security Gate Failure",
+      "type": "n8n-nodes-base.function",
+      "position": [650, 400],
+      "parameters": {
+        "functionCode": "const pipeline = $input.item.json.pipeline_name;\nconst stage = $input.item.json.stage;\nconst gate_type = $input.item.json.gate_type;\nconst failure_reason = $input.item.json.failure_reason;\nconst build_id = $input.item.json.build_id;\n\n// Determine if failure is blocking\nconst blocking_gates = ['security_scan', 'compliance_check', 'cost_threshold'];\nconst is_blocking = blocking_gates.includes(gate_type);\n\n// Check for override eligibility\nconst override_eligible = \n  gate_type === 'cost_threshold' || \n  (gate_type === 'security_scan' && !failure_reason.includes('CRITICAL'));\n\nconst approval_required = is_blocking && override_eligible;\n\n// Generate rollback command if needed\nconst rollback_command = is_blocking && !override_eligible ? \n  `gcloud builds cancel ${build_id} && git revert HEAD` : null;\n\nreturn {\n  json: {\n    ...$$input.item.json,\n    is_blocking,\n    override_eligible,\n    approval_required,\n    rollback_command,\n    notification_channels: is_blocking ? \n      ['gchat_security', 'email_team', 'pagerduty'] : \n      ['gchat_dev'],\n    escalation_time: is_blocking ? 15 : 60 // minutes\n  }\n};"
+      }
+    },
+    {
+      "id": "incident_handler",
+      "name": "Incident Response",
+      "type": "n8n-nodes-base.function",
+      "position": [650, 550],
+      "parameters": {
+        "functionCode": "const incident_type = $input.item.json.incident_type;\nconst severity = $input.item.json.severity;\nconst affected_systems = $input.item.json.affected_systems || [];\nconst indicators = $input.item.json.indicators_of_compromise || [];\n\n// NIST IR phases\nconst ir_phases = {\n  preparation: 'completed',\n  detection: 'completed',\n  analysis: 'in_progress',\n  containment: 'pending',\n  eradication: 'pending',\n  recovery: 'pending',\n  lessons_learned: 'pending'\n};\n\n// Determine incident commander based on type\nconst incident_commanders = {\n  'data_breach': 'security-lead@example.com',\n  'ransomware': 'ciso@example.com',\n  'ddos': 'network-lead@example.com',\n  'insider_threat': 'hr-security@example.com',\n  'supply_chain': 'vendor-mgmt@example.com'\n};\n\n// Generate runbook reference\nconst runbook_mapping = {\n  'data_breach': 'IR-001-DataBreach',\n  'ransomware': 'IR-002-Ransomware',\n  'ddos': 'IR-003-DDoS',\n  'insider_threat': 'IR-004-Insider',\n  'supply_chain': 'IR-005-SupplyChain'\n};\n\n// Calculate business impact\nconst impact_analysis = {\n  confidentiality: incident_type.includes('breach') ? 'HIGH' : 'MEDIUM',\n  integrity: incident_type.includes('ransomware') ? 'HIGH' : 'LOW',\n  availability: incident_type.includes('ddos') ? 'HIGH' : 'LOW',\n  financial: affected_systems.length * 1000, // Rough estimate\n  reputation: severity === 'CRITICAL' ? 'HIGH' : 'MEDIUM'\n};\n\n// Compliance reporting requirements\nconst reporting_required = {\n  cmmc: severity === 'CRITICAL' || incident_type === 'data_breach',\n  gdpr: incident_type === 'data_breach' && affected_systems.includes('eu_data'),\n  breach_notification: incident_type === 'data_breach',\n  timeline: incident_type === 'data_breach' ? '72 hours' : '7 days'\n};\n\nreturn {\n  json: {\n    ...$$input.item.json,\n    ir_phases,\n    incident_commander: incident_commanders[incident_type] || 'soc@example.com',\n    runbook: runbook_mapping[incident_type] || 'IR-000-Generic',\n    impact_analysis,\n    reporting_required,\n    war_room_url: `https://meet.example.com/incident-${Date.now()}`,\n    evidence_chain: {\n      preserve: true,\n      snapshot: true,\n      forensics: severity === 'CRITICAL'\n    }\n  }\n};"
+      }
+    },
+    {
+      "id": "cost_alert_handler",
+      "name": "Cost Threshold Alert",
+      "type": "n8n-nodes-base.function",
+      "position": [650, 700],
+      "parameters": {
+        "functionCode": "const current_cost = parseFloat($input.item.json.current_monthly_cost);\nconst projected_cost = parseFloat($input.item.json.projected_monthly_cost);\nconst budget_limit = parseFloat($input.item.json.budget_limit);\nconst cost_center = $input.item.json.cost_center;\nconst resources = $input.item.json.top_cost_resources || [];\n\n// Calculate overrun\nconst overrun_percentage = ((projected_cost - budget_limit) / budget_limit * 100).toFixed(2);\nconst days_until_limit = Math.floor((budget_limit - current_cost) / (current_cost / new Date().getDate()));\n\n// Identify cost optimization opportunities\nconst optimizations = [];\n\nresources.forEach(resource => {\n  if (resource.type === 'compute' && resource.utilization < 20) {\n    optimizations.push({\n      resource: resource.name,\n      action: 'downsize',\n      potential_savings: resource.cost * 0.5\n    });\n  }\n  if (resource.type === 'storage' && resource.last_accessed > 30) {\n    optimizations.push({\n      resource: resource.name,\n      action: 'archive',\n      potential_savings: resource.cost * 0.8\n    });\n  }\n  if (resource.type === 'network' && resource.egress_gb > 100) {\n    optimizations.push({\n      resource: resource.name,\n      action: 'cdn_optimization',\n      potential_savings: resource.cost * 0.3\n    });\n  }\n});\n\nconst total_savings = optimizations.reduce((sum, opt) => sum + opt.potential_savings, 0);\n\n// Determine actions\nconst actions = [];\nif (overrun_percentage > 20) {\n  actions.push('immediate_review');\n  actions.push('spending_freeze');\n}\nif (overrun_percentage > 10) {\n  actions.push('optimization_required');\n}\nif (days_until_limit < 7) {\n  actions.push('emergency_approval_needed');\n}\n\nreturn {\n  json: {\n    ...$$input.item.json,\n    overrun_percentage,\n    days_until_limit,\n    optimizations,\n    total_potential_savings: total_savings,\n    actions,\n    approval_required: overrun_percentage > 10,\n    auto_optimize: overrun_percentage < 10 && optimizations.length > 0\n  }\n};"
+      }
+    },
+    {
+      "id": "google_chat_notification",
+      "name": "Send Google Chat Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1050, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.notification_channels.includes('gchat_security') ? $credentials.gchat_security_webhook : $credentials.gchat_dev_webhook}}",
+        "authentication": "none",
+        "jsonParameters": true,
+        "bodyParametersJson": "{\n  \"cardsV2\": [\n    {\n      \"cardId\": \"security-alert-{{Date.now()}}\",\n      \"card\": {\n        \"header\": {\n          \"title\": \"⚠️ Security Event Detected\",\n          \"subtitle\": \"{{$json.event_type}} - {{$json.severity}}\",\n          \"imageUrl\": \"https://fonts.gstatic.com/s/i/googlematerialicons/warning/v12/24px.svg\",\n          \"imageType\": \"CIRCLE\"\n        },\n        \"sections\": [\n          {\n            \"widgets\": [\n              {\n                \"decoratedText\": {\n                  \"topLabel\": \"Component\",\n                  \"text\": \"{{$json.component || $json.resource || 'System'}}\",\n                  \"startIcon\": {\n                    \"knownIcon\": \"DESCRIPTION\"\n                  }\n                }\n              },\n              {\n                \"decoratedText\": {\n                  \"topLabel\": \"Priority\",\n                  \"text\": \"{{$json.priority || 'P3'}}\",\n                  \"startIcon\": {\n                    \"knownIcon\": \"STAR\"\n                  }\n                }\n              },\n              {\n                \"decoratedText\": {\n                  \"topLabel\": \"Action Required\",\n                  \"text\": \"{{$json.response_action || $json.remediation.action || 'Review'}}\",\n                  \"startIcon\": {\n                    \"knownIcon\": \"TASK_ALT\"\n                  },\n                  \"wrapText\": true\n                }\n              },\n              {\n                \"decoratedText\": {\n                  \"topLabel\": \"SLA\",\n                  \"text\": \"{{$json.sla_hours}} hours\",\n                  \"startIcon\": {\n                    \"knownIcon\": \"CLOCK\"\n                  }\n                }\n              },\n              {\n                \"buttonList\": {\n                  \"buttons\": [\n                    {\n                      \"text\": \"View Details\",\n                      \"onClick\": {\n                        \"openLink\": {\n                          \"url\": \"https://security.example.com/events/{{$json.event_id}}\"\n                        }\n                      }\n                    }\n                  ]\n                }\n              }\n            ]\n          }\n        ]\n      }\n    }\n  ]\n}",
+        "options": {
+          "bodyContentType": "json"
+        }
+      }
+    },
+    {
+      "id": "email_notification",
+      "name": "Send Email Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "position": [1050, 450],
+      "parameters": {
+        "fromEmail": "devsecops@example.com",
+        "toEmail": "={{$json.incident_commander || 'security-team@example.com'}}",
+        "subject": "[{{$json.priority}}] Security Event: {{$json.event_type}}",
+        "html": true,
+        "htmlBody": "<h2>Security Event Notification</h2>\n<p><strong>Type:</strong> {{$json.event_type}}</p>\n<p><strong>Severity:</strong> {{$json.severity}}</p>\n<p><strong>Component:</strong> {{$json.component || $json.resource}}</p>\n<p><strong>Description:</strong> {{$json.description || $json.failure_reason}}</p>\n<h3>Required Actions</h3>\n<ul>\n<li>{{$json.response_action || 'Review and assess impact'}}</li>\n<li>{{$json.remediation ? $json.remediation.action : 'Document findings'}}</li>\n</ul>\n<h3>Compliance Impact</h3>\n<p>Controls Affected: {{$json.compliance_controls || 'None identified'}}</p>\n<p>Evidence Required: {{$json.requires_attestation ? 'Yes' : 'No'}}</p>\n<hr>\n<p><small>Generated by DevSecOps Automation Platform at {{new Date().toISOString()}}</small></p>"
+      }
+    },
+    {
+      "id": "pagerduty_incident",
+      "name": "Create PagerDuty Incident",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1050, 600],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.pagerduty.com/incidents",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "headers": {
+          "Accept": "application/vnd.pagerduty+json;version=2",
+          "From": "devsecops@example.com"
+        },
+        "jsonParameters": true,
+        "bodyParametersJson": "{\n  \"incident\": {\n    \"type\": \"incident\",\n    \"title\": \"{{$json.event_type}}: {{$json.severity}} severity event\",\n    \"service\": {\n      \"id\": \"{{$json.service_id || 'P5DTL0C'}}\",\n      \"type\": \"service_reference\"\n    },\n    \"urgency\": \"{{$json.priority === 'P1' ? 'high' : 'low'}}\",\n    \"body\": {\n      \"type\": \"incident_body\",\n      \"details\": \"{{JSON.stringify($json)}}\"\n    },\n    \"escalation_policy\": {\n      \"id\": \"{{$json.escalation_policy || 'P89FGH3'}}\",\n      \"type\": \"escalation_policy_reference\"\n    }\n  }\n}"
+      }
+    },
+    {
+      "id": "evidence_collector",
+      "name": "Collect Compliance Evidence",
+      "type": "n8n-nodes-base.function",
+      "position": [1250, 300],
+      "parameters": {
+        "functionCode": "// Collect and hash evidence for compliance\nconst crypto = require('crypto');\n\nconst evidence_data = {\n  event_id: crypto.randomBytes(16).toString('hex'),\n  timestamp: new Date().toISOString(),\n  event_type: $input.item.json.event_type,\n  severity: $input.item.json.severity,\n  source: $input.item.json.scanner || $input.item.json.source || 'automated_detection',\n  \n  // Control mapping\n  controls_affected: $input.item.json.compliance_controls || [],\n  frameworks: ['CMMC_2.0', 'NIST_800-171_Rev2'],\n  \n  // Event details\n  details: {\n    component: $input.item.json.component,\n    resource: $input.item.json.resource,\n    finding: $input.item.json.finding || $input.item.json.description,\n    remediation: $input.item.json.remediation\n  },\n  \n  // Response actions\n  response: {\n    action_taken: $input.item.json.response_action,\n    automated: $input.item.json.auto_remediate || false,\n    ticket_id: $input.item.json.ticket_id || null,\n    resolved: false,\n    resolution_time: null\n  },\n  \n  // Audit trail\n  audit: {\n    detected_by: 'n8n_automation',\n    workflow_execution: $execution.id,\n    node_id: $node.name\n  }\n};\n\n// Generate hash for integrity\nconst evidence_string = JSON.stringify(evidence_data, null, 2);\nconst hash = crypto.createHash('sha256').update(evidence_string).digest('hex');\n\nevidence_data.integrity_hash = hash;\n\n// Determine storage location\nconst storage_class = $input.item.json.severity === 'CRITICAL' ? \n  'immutable_archive' : 'standard_archive';\n\nreturn {\n  json: {\n    evidence_data,\n    storage_class,\n    retention_days: 2555, // 7 years for compliance\n    hash,\n    manifest_entry: {\n      id: evidence_data.event_id,\n      hash: hash,\n      timestamp: evidence_data.timestamp,\n      type: evidence_data.event_type\n    }\n  }\n};"
+      }
+    },
+    {
+      "id": "store_evidence",
+      "name": "Store in GCS",
+      "type": "n8n-nodes-base.googleCloudStorage",
+      "position": [1450, 300],
+      "parameters": {
+        "operation": "upload",
+        "bucket": "compliance-evidence-{{$json.storage_class}}",
+        "fileName": "evidence/{{$json.evidence_data.event_id}}.json",
+        "binaryData": false,
+        "content": "{{JSON.stringify($json.evidence_data, null, 2)}}",
+        "metadata": {
+          "hash": "{{$json.hash}}",
+          "event_type": "{{$json.evidence_data.event_type}}",
+          "severity": "{{$json.evidence_data.severity}}",
+          "retention": "{{$json.retention_days}}"
+        }
+      }
+    },
+    {
+      "id": "update_manifest",
+      "name": "Update Evidence Manifest",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1650, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://compliance.example.com/api/manifest",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "jsonParameters": true,
+        "bodyParametersJson": "{\n  \"entry\": {{JSON.stringify($json.manifest_entry)}},\n  \"storage_location\": \"gs://compliance-evidence-{{$json.storage_class}}/evidence/{{$json.evidence_data.event_id}}.json\",\n  \"frameworks\": [\"CMMC_2.0\", \"NIST_800-171_Rev2\"],\n  \"controls\": {{JSON.stringify($json.evidence_data.controls_affected)}}\n}"
+      }
+    },
+    {
+      "id": "metrics_reporter",
+      "name": "Update Metrics",
+      "type": "n8n-nodes-base.prometheus",
+      "position": [1250, 600],
+      "parameters": {
+        "operation": "push",
+        "metrics": [
+          {
+            "name": "security_events_total",
+            "value": "1",
+            "type": "counter",
+            "labels": {
+              "event_type": "{{$json.event_type}}",
+              "severity": "{{$json.severity}}"
+            }
+          },
+          {
+            "name": "compliance_violations_total",
+            "value": "{{$json.event_type === 'compliance' ? 1 : 0}}",
+            "type": "counter",
+            "labels": {
+              "framework": "{{$json.framework}}",
+              "control": "{{$json.control_id}}"
+            }
+          },
+          {
+            "name": "mean_time_to_detect",
+            "value": "{{Date.now() - new Date($json.occurrence_time).getTime()}}",
+            "type": "histogram",
+            "labels": {
+              "detection_source": "{{$json.scanner || 'manual'}}"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "connections": {
+    "webhook_trigger": {
+      "main": [
+        [
+          {
+            "node": "event_classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "event_classifier": {
+      "main": [
+        [
+          {
+            "node": "vulnerability_handler",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "compliance_handler",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "gate_failure_handler",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "incident_handler",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "cost_alert_handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vulnerability_handler": {
+      "main": [
+        [
+          {
+            "node": "create_jira_ticket",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "google_chat_notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "evidence_collector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "compliance_handler": {
+      "main": [
+        [
+          {
+            "node": "apply_remediation",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "email_notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "evidence_collector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "gate_failure_handler": {
+      "main": [
+        [
+          {
+            "node": "google_chat_notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "email_notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "metrics_reporter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "incident_handler": {
+      "main": [
+        [
+          {
+            "node": "pagerduty_incident",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "google_chat_notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "email_notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "evidence_collector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cost_alert_handler": {
+      "main": [
+        [
+          {
+            "node": "google_chat_notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "email_notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "metrics_reporter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "evidence_collector": {
+      "main": [
+        [
+          {
+            "node": "store_evidence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "store_evidence": {
+      "main": [
+        [
+          {
+            "node": "update_manifest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create_jira_ticket": {
+      "main": [
+        [
+          {
+            "node": "metrics_reporter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "apply_remediation": {
+      "main": [
+        [
+          {
+            "node": "metrics_reporter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionTimeout": 900,
+    "maxExecutionTime": 900,
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true
+  },
+  "staticData": null,
+  "tags": [
+    "security",
+    "compliance",
+    "automation",
+    "devsecops"
+  ],
+  "updatedAt": "2024-01-15T10:00:00.000Z"
+}

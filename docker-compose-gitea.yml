@@ -1,0 +1,276 @@
+version: '3.8'
+
+# Containerized Gitea + PostgreSQL + Actions Runner
+# This is the foundation service for the entire DevSecOps platform
+
+networks:
+  gitea_default:
+    name: gitea_default
+    driver: bridge
+  gitea_data:
+    name: gitea_data
+    driver: bridge
+    internal: true  # No external internet access
+  gitea_monitoring:
+    name: gitea_monitoring
+    driver: bridge
+
+volumes:
+  gitea_data:
+    name: gitea_data
+  gitea_config:
+    name: gitea_config
+  postgres_gitea_data:
+    name: postgres_gitea_data
+  gitea_actions_cache:
+    name: gitea_actions_cache
+  caddy_data:
+    name: caddy_gitea_data
+  caddy_config:
+    name: caddy_gitea_config
+
+services:
+  # PostgreSQL database for Gitea
+  postgres-gitea:
+    image: postgres:15-alpine
+    container_name: postgres-gitea
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: gitea
+      POSTGRES_USER: gitea
+      POSTGRES_PASSWORD: ${POSTGRES_GITEA_PASSWORD:-ChangeMeGitea123!}
+      PGDATA: /var/lib/postgresql/data/pgdata
+
+    volumes:
+      - postgres_gitea_data:/var/lib/postgresql/data
+      - ./backups/postgres-gitea:/backups
+
+    ports:
+      - "${POSTGRES_GITEA_PORT:-10002}:5432"
+
+    networks:
+      - gitea_data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitea -d gitea"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    labels:
+      - "com.gitea.component=database"
+      - "com.gitea.tier=data"
+      - "com.cmmc.asset-category=SPA"
+      - "com.cmmc.control=AC.L2-3.1.1,AU.L2-3.3.1"
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # Gitea Git Server
+  gitea:
+    image: gitea/gitea:1.21-rootless
+    container_name: gitea
+    restart: unless-stopped
+
+    environment:
+      # Database configuration
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: postgres-gitea:5432
+      GITEA__database__NAME: gitea
+      GITEA__database__USER: gitea
+      GITEA__database__PASSWD: ${POSTGRES_GITEA_PASSWORD:-ChangeMeGitea123!}
+
+      # Server configuration
+      GITEA__server__DOMAIN: ${GITEA_DOMAIN:-localhost}
+      GITEA__server__SSH_DOMAIN: ${GITEA_DOMAIN:-localhost}
+      GITEA__server__ROOT_URL: ${GITEA_ROOT_URL:-http://localhost:10000/}
+      GITEA__server__HTTP_PORT: 10000
+      GITEA__server__SSH_PORT: 10001
+      GITEA__server__START_SSH_SERVER: true
+      GITEA__server__LFS_START_SERVER: true
+      GITEA__server__OFFLINE_MODE: false
+
+      # Security configuration
+      GITEA__security__INSTALL_LOCK: true
+      GITEA__security__SECRET_KEY: ${GITEA_SECRET_KEY:-ChangeMeToRandomString64CharactersLongForSecurityPurposes!!}
+      GITEA__security__INTERNAL_TOKEN: ${GITEA_INTERNAL_TOKEN}
+      GITEA__security__PASSWORD_HASH_ALGO: argon2
+      GITEA__security__MIN_PASSWORD_LENGTH: 14
+      GITEA__security__PASSWORD_COMPLEXITY: lower,upper,digit,spec
+
+      # Session configuration
+      GITEA__session__PROVIDER: db
+      GITEA__session__COOKIE_SECURE: ${GITEA_COOKIE_SECURE:-false}
+      GITEA__session__COOKIE_NAME: gitea_session
+
+      # Logging configuration
+      GITEA__log__MODE: console,file
+      GITEA__log__LEVEL: Info
+      GITEA__log__ROOT_PATH: /var/lib/gitea/log
+      GITEA__log__ENABLE_ACCESS_LOG: true
+
+      # Repository configuration
+      GITEA__repository__ROOT: /var/lib/gitea/git/repositories
+      GITEA__repository__DEFAULT_BRANCH: main
+      GITEA__repository__ENABLE_PUSH_CREATE_USER: true
+      GITEA__repository__ENABLE_PUSH_CREATE_ORG: true
+
+      # Service configuration
+      GITEA__service__DISABLE_REGISTRATION: ${GITEA_DISABLE_REGISTRATION:-false}
+      GITEA__service__REQUIRE_SIGNIN_VIEW: false
+      GITEA__service__REGISTER_EMAIL_CONFIRM: false
+      GITEA__service__ENABLE_NOTIFY_MAIL: false
+      GITEA__service__DEFAULT_KEEP_EMAIL_PRIVATE: true
+      GITEA__service__DEFAULT_ALLOW_CREATE_ORGANIZATION: true
+
+      # OAuth2 configuration
+      GITEA__oauth2__ENABLE: true
+      GITEA__oauth2__JWT_SECRET: ${GITEA_OAUTH2_JWT_SECRET}
+
+      # Actions (CI/CD) configuration
+      GITEA__actions__ENABLED: true
+      GITEA__actions__DEFAULT_ACTIONS_URL: https://github.com
+
+      # Webhook configuration
+      GITEA__webhook__ALLOWED_HOST_LIST: "*"
+      GITEA__webhook__SKIP_TLS_VERIFY: ${GITEA_WEBHOOK_SKIP_TLS:-false}
+
+      # Metrics configuration (Prometheus)
+      GITEA__metrics__ENABLED: true
+      GITEA__metrics__TOKEN: ${GITEA_METRICS_TOKEN:-ChangeMeMetricsToken123!}
+
+      # Admin user (created on first run)
+      GITEA__admin__USERNAME: ${GITEA_ADMIN_USER:-admin}
+      GITEA__admin__PASSWORD: ${GITEA_ADMIN_PASSWORD:-ChangeMe123!}
+      GITEA__admin__EMAIL: ${GITEA_ADMIN_EMAIL:-admin@example.com}
+
+      # User/UID for rootless
+      USER_UID: 1000
+      USER_GID: 1000
+
+    volumes:
+      - gitea_data:/var/lib/gitea
+      - gitea_config:/etc/gitea
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+
+    ports:
+      - "${GITEA_HTTP_PORT:-10000}:10000"
+      - "${GITEA_SSH_PORT:-10001}:10001"
+
+    networks:
+      - gitea_default
+      - gitea_data
+      - gitea_monitoring
+
+    depends_on:
+      postgres-gitea:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:10000/api/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    labels:
+      - "com.gitea.component=server"
+      - "com.gitea.tier=application"
+      - "com.cmmc.asset-category=CUI"
+      - "com.cmmc.control=AC.L2-3.1.1,AU.L2-3.3.1,IA.L2-3.5.1,SC.L2-3.13.8"
+      - "traefik.enable=true"
+      - "traefik.http.routers.gitea.rule=Host(`${GITEA_DOMAIN:-localhost}`)"
+      - "traefik.http.services.gitea.loadbalancer.server.port=10000"
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+  # Gitea Actions Runner (for CI/CD pipelines)
+  gitea-runner:
+    image: gitea/act_runner:latest
+    container_name: gitea-runner
+    restart: unless-stopped
+
+    environment:
+      GITEA_INSTANCE_URL: http://gitea:10000
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${GITEA_RUNNER_TOKEN}
+      GITEA_RUNNER_NAME: docker-runner-1
+      GITEA_RUNNER_LABELS: ubuntu-latest,ubuntu-22.04,ubuntu-20.04
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - gitea_actions_cache:/data
+      - ./config/runner-config.yaml:/config.yaml:ro
+
+    networks:
+      - gitea_default
+
+    depends_on:
+      gitea:
+        condition: service_healthy
+
+    privileged: true  # Required for Docker-in-Docker
+
+    labels:
+      - "com.gitea.component=runner"
+      - "com.gitea.tier=build"
+      - "com.cmmc.asset-category=SPC"
+      - "com.cmmc.control=SI.L2-3.14.1,CM.L2-3.4.2"
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+  # Reverse Proxy (Caddy) for TLS termination
+  caddy-gitea:
+    image: caddy:2-alpine
+    container_name: caddy-gitea
+    restart: unless-stopped
+
+    ports:
+      - "${GITEA_HTTPS_PORT:-10003}:443"
+      - "${GITEA_HTTP_REDIRECT_PORT:-10004}:80"
+
+    volumes:
+      - ./config/Caddyfile.gitea:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+    networks:
+      - gitea_default
+
+    depends_on:
+      - gitea
+
+    labels:
+      - "com.gitea.component=proxy"
+      - "com.gitea.tier=edge"
+      - "com.cmmc.asset-category=SPA"
+      - "com.cmmc.control=SC.L2-3.13.8,SC.L2-3.13.11"
+
+    # Only deploy if TLS is enabled
+    profiles:
+      - tls

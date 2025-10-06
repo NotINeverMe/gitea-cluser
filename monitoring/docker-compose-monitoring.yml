@@ -1,0 +1,304 @@
+version: '3.8'
+
+# CMMC 2.0: AU.L2-3.3.1 - System auditing logging
+# NIST SP 800-171: 3.3.1, 3.3.2 - Audit and accountability
+# NIST SP 800-53: AU-6, SI-4 - Audit review and monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=90d'  # CMMC compliance: 90-day retention
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+      - '--log.level=info'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts:/etc/prometheus/alerts:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - monitoring
+    labels:
+      - "compliance.cmmc=AU.L2-3.3.1"
+      - "compliance.nist171=3.3.1"
+      - "compliance.nist53=AU-6"
+
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: alertmanager
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--log.level=info'
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "9093:9093"
+    networks:
+      - monitoring
+    labels:
+      - "compliance.cmmc=IR.L2-3.6.1"
+      - "compliance.nist171=3.6.1"
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      # Database configuration
+      - GF_DATABASE_TYPE=postgres
+      - GF_DATABASE_HOST=postgres:5432
+      - GF_DATABASE_NAME=grafana
+      - GF_DATABASE_USER=grafana
+      - GF_DATABASE_PASSWORD=${GRAFANA_DB_PASSWORD:-ChangeMe123!}
+
+      # Security configuration
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-ChangeMe123!}
+      - GF_SECURITY_SECRET_KEY=${GRAFANA_SECRET_KEY:-SW2YcwTIb9zOOi1QaMcukeTQoD4wMWm1}
+      - GF_SECURITY_DISABLE_GRAVATAR=true
+      - GF_SECURITY_COOKIE_SECURE=true
+      - GF_SECURITY_COOKIE_SAMESITE=strict
+      - GF_SECURITY_STRICT_TRANSPORT_SECURITY=true
+      - GF_SECURITY_X_CONTENT_TYPE_OPTIONS=true
+      - GF_SECURITY_X_XSS_PROTECTION=true
+
+      # OAuth2/GCP authentication
+      - GF_AUTH_GENERIC_OAUTH_ENABLED=true
+      - GF_AUTH_GENERIC_OAUTH_NAME=Google
+      - GF_AUTH_GENERIC_OAUTH_CLIENT_ID=${OAUTH_CLIENT_ID}
+      - GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET=${OAUTH_CLIENT_SECRET}
+      - GF_AUTH_GENERIC_OAUTH_SCOPES=openid email profile
+      - GF_AUTH_GENERIC_OAUTH_AUTH_URL=https://accounts.google.com/o/oauth2/v2/auth
+      - GF_AUTH_GENERIC_OAUTH_TOKEN_URL=https://oauth2.googleapis.com/token
+      - GF_AUTH_GENERIC_OAUTH_API_URL=https://openidconnect.googleapis.com/v1/userinfo
+      - GF_AUTH_GENERIC_OAUTH_ALLOWED_DOMAINS=${ALLOWED_DOMAINS:-example.com}
+      - GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH=contains(groups[*], 'admin') && 'Admin' || 'Viewer'
+
+      # Server configuration
+      - GF_SERVER_ROOT_URL=https://${GRAFANA_DOMAIN:-monitoring.example.com}
+      - GF_SERVER_ENABLE_GZIP=true
+
+      # Analytics and telemetry
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+
+      # Feature toggles
+      - GF_FEATURE_TOGGLES_ENABLE=publicDashboards
+
+      # Unified alerting
+      - GF_UNIFIED_ALERTING_ENABLED=true
+
+      # Install plugins
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-clock-panel
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+    networks:
+      - monitoring
+    labels:
+      - "compliance.cmmc=AC.L2-3.1.20"
+      - "compliance.nist171=3.1.20"
+      - "compliance.nist53=AC-7"
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: grafana-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=grafana
+      - POSTGRES_USER=grafana
+      - POSTGRES_PASSWORD=${GRAFANA_DB_PASSWORD:-ChangeMe123!}
+      - POSTGRES_INITDB_ARGS=--encoding=UTF8 --locale=C
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - monitoring
+    labels:
+      - "compliance.cmmc=SC.L2-3.13.16"
+      - "compliance.nist171=3.13.16"
+
+  # Exporters
+  node_exporter:
+    image: prom/node-exporter:v1.6.1
+    container_name: node_exporter
+    restart: unless-stopped
+    command:
+      - '--path.rootfs=/host'
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)'
+    volumes:
+      - /:/host:ro,rslave
+    ports:
+      - "9100:9100"
+    networks:
+      - monitoring
+    labels:
+      - "compliance.cmmc=SI.L2-3.14.4"
+      - "compliance.nist171=3.14.4"
+
+  blackbox_exporter:
+    image: prom/blackbox-exporter:v0.24.0
+    container_name: blackbox_exporter
+    restart: unless-stopped
+    command:
+      - '--config.file=/config/blackbox.yml'
+    volumes:
+      - ./configs/blackbox.yml:/config/blackbox.yml:ro
+    ports:
+      - "9115:9115"
+    networks:
+      - monitoring
+    labels:
+      - "compliance.cmmc=SI.L2-3.14.4"
+      - "compliance.nist171=3.14.4"
+
+  json_exporter:
+    image: prometheuscommunity/json-exporter:v0.6.0
+    container_name: json_exporter
+    restart: unless-stopped
+    volumes:
+      - ./configs/json-exporter.yml:/config.yml:ro
+    command:
+      - '--config.file=/config.yml'
+    ports:
+      - "7979:7979"
+    networks:
+      - monitoring
+
+  # Custom exporters
+  sonarqube_exporter:
+    build:
+      context: ./exporters
+      dockerfile: Dockerfile.sonarqube
+    container_name: sonarqube_exporter
+    restart: unless-stopped
+    environment:
+      - SONARQUBE_URL=${SONARQUBE_URL:-http://sonarqube:9000}
+      - SONARQUBE_TOKEN=${SONARQUBE_TOKEN}
+      - PORT=9200
+      - LOG_LEVEL=INFO
+    ports:
+      - "9200:9200"
+    networks:
+      - monitoring
+    labels:
+      - "compliance.cmmc=CA.L2-3.12.3"
+      - "compliance.nist171=3.12.3"
+
+  security_scan_exporter:
+    build:
+      context: ./exporters
+      dockerfile: Dockerfile.security
+    container_name: security_scan_exporter
+    restart: unless-stopped
+    environment:
+      - TRIVY_API_URL=${TRIVY_API_URL:-http://trivy:8080}
+      - GRYPE_API_URL=${GRYPE_API_URL:-http://grype:8080}
+      - PORT=9201
+      - LOG_LEVEL=INFO
+      - SCAN_INTERVAL=300
+    volumes:
+      - ./exporters/scan-results:/app/scan-results:ro
+    ports:
+      - "9201:9201"
+    networks:
+      - monitoring
+    labels:
+      - "compliance.cmmc=RA.L2-3.11.2"
+      - "compliance.nist171=3.11.2"
+      - "compliance.nist53=RA-5"
+
+  compliance_exporter:
+    build:
+      context: ./exporters
+      dockerfile: Dockerfile.compliance
+    container_name: compliance_exporter
+    restart: unless-stopped
+    environment:
+      - COMPLIANCE_CONFIG=/app/config/compliance.yml
+      - EVIDENCE_PATH=/app/evidence
+      - PORT=9202
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./configs/compliance.yml:/app/config/compliance.yml:ro
+      - ../compliance/evidence:/app/evidence:ro
+    ports:
+      - "9202:9202"
+    networks:
+      - monitoring
+    labels:
+      - "compliance.cmmc=CA.L2-3.12.1"
+      - "compliance.nist171=3.12.1"
+      - "compliance.nist53=CA-2"
+
+  # Stackdriver exporter for GCP metrics
+  stackdriver_exporter:
+    image: prometheuscommunity/stackdriver-exporter:v0.14.1
+    container_name: stackdriver_exporter
+    restart: unless-stopped
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/config/gcp-credentials.json
+      - STACKDRIVER_EXPORTER_WEB_LISTEN_ADDRESS=:9255
+      - STACKDRIVER_EXPORTER_MONITORING_METRICS_TYPE_PREFIXES=compute.googleapis.com/,storage.googleapis.com/,logging.googleapis.com/
+      - STACKDRIVER_EXPORTER_MONITORING_METRICS_INTERVAL=60s
+      - STACKDRIVER_EXPORTER_MONITORING_METRICS_OFFSET=0s
+    volumes:
+      - ./configs/gcp-credentials.json:/config/gcp-credentials.json:ro
+    ports:
+      - "9255:9255"
+    networks:
+      - monitoring
+    labels:
+      - "compliance.cmmc=SI.L2-3.14.6"
+      - "compliance.nist171=3.14.6"
+
+networks:
+  monitoring:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  prometheus_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/prometheus
+  alertmanager_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/alertmanager
+  grafana_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/grafana
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data/postgres

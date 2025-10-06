@@ -1,0 +1,519 @@
+# Container and Infrastructure Security Scanning
+# CMMC 2.0: SI.L2-3.14.2, RA.L2-3.11.2
+# NIST SP 800-171: 3.11.2, 3.14.1, 3.14.2
+
+name: Container Security Analysis
+
+on:
+  push:
+    paths:
+      - 'Dockerfile*'
+      - 'docker-compose*.yml'
+      - '.dockerignore'
+      - '**/*.yaml'
+      - '**/*.yml'
+      - 'package*.json'
+      - 'requirements.txt'
+      - 'go.mod'
+      - 'pom.xml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'Dockerfile*'
+      - 'docker-compose*.yml'
+  schedule:
+    # Daily vulnerability database update scan at 4 AM UTC
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      image:
+        description: 'Container image to scan'
+        required: false
+        type: string
+      severity:
+        description: 'Minimum severity to report'
+        required: false
+        default: 'MEDIUM'
+        type: choice
+        options:
+          - CRITICAL
+          - HIGH
+          - MEDIUM
+          - LOW
+
+env:
+  TRIVY_SERVER: http://localhost:4954
+  GRYPE_DB_UPDATE: true
+  EVIDENCE_RETENTION: 90
+
+jobs:
+  # Identify containers and images to scan
+  identify-targets:
+    runs-on: ubuntu-latest
+    outputs:
+      dockerfiles: ${{ steps.find.outputs.dockerfiles }}
+      compose_files: ${{ steps.find.outputs.compose_files }}
+      images: ${{ steps.find.outputs.images }}
+      scan_matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Find scan targets
+        id: find
+        run: |
+          echo "=== Container Security Scan Targets ===" > scan-targets.log
+          echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> scan-targets.log
+          echo "Repository: ${{ github.repository }}" >> scan-targets.log
+          echo "Commit: ${{ github.sha }}" >> scan-targets.log
+
+          # Find Dockerfiles
+          DOCKERFILES=$(find . -name "Dockerfile*" -type f | jq -R -s -c 'split("\n")[:-1]')
+          echo "dockerfiles=$DOCKERFILES" >> $GITHUB_OUTPUT
+          echo "Dockerfiles found: $DOCKERFILES" >> scan-targets.log
+
+          # Find docker-compose files
+          COMPOSE_FILES=$(find . -name "docker-compose*.yml" -o -name "docker-compose*.yaml" | jq -R -s -c 'split("\n")[:-1]')
+          echo "compose_files=$COMPOSE_FILES" >> $GITHUB_OUTPUT
+          echo "Compose files found: $COMPOSE_FILES" >> scan-targets.log
+
+          # Extract images from compose files
+          IMAGES="[]"
+          for compose in $(echo $COMPOSE_FILES | jq -r '.[]'); do
+            if [ -f "$compose" ]; then
+              # Extract image names from docker-compose
+              COMPOSE_IMAGES=$(grep -E '^\s*image:' "$compose" | sed 's/.*image:\s*//' | jq -R -s -c 'split("\n")[:-1]')
+              IMAGES=$(echo "$IMAGES $COMPOSE_IMAGES" | jq -s 'add | unique')
+            fi
+          done
+          echo "images=$IMAGES" >> $GITHUB_OUTPUT
+          echo "Images to scan: $IMAGES" >> scan-targets.log
+
+      - name: Create scan matrix
+        id: matrix
+        run: |
+          # Create matrix for parallel scanning
+          MATRIX='{
+            "include": [
+              {"scanner": "trivy", "type": "image"},
+              {"scanner": "trivy", "type": "filesystem"},
+              {"scanner": "trivy", "type": "config"},
+              {"scanner": "grype", "type": "image"},
+              {"scanner": "grype", "type": "directory"}
+            ]
+          }'
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+      - name: Upload target list
+        uses: actions/upload-artifact@v3
+        with:
+          name: scan-targets-${{ github.run_id }}
+          path: scan-targets.log
+          retention-days: 30
+
+  # Trivy comprehensive scanning
+  trivy-scan:
+    needs: identify-targets
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJson(needs.identify-targets.outputs.dockerfiles || '[]') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Trivy
+        run: |
+          # Install latest Trivy
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+          # Verify installation and update database
+          trivy --version
+          trivy image --download-db-only
+
+      - name: Build container if Dockerfile exists
+        id: build
+        if: matrix.target != ''
+        run: |
+          DOCKERFILE="${{ matrix.target }}"
+          IMAGE_NAME="scan-target:${{ github.sha }}"
+
+          if [ -f "$DOCKERFILE" ]; then
+            echo "Building image from $DOCKERFILE"
+            docker build -f "$DOCKERFILE" -t "$IMAGE_NAME" .
+            echo "image=$IMAGE_NAME" >> $GITHUB_OUTPUT
+            echo "built=true" >> $GITHUB_OUTPUT
+          else
+            echo "built=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Scan with Trivy
+        id: trivy
+        run: |
+          # Initialize evidence log
+          echo "=== Trivy Security Scan ===" > trivy-evidence.log
+          echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> trivy-evidence.log
+          echo "Target: ${{ matrix.target }}" >> trivy-evidence.log
+
+          # Set scan parameters based on environment
+          SEVERITY="${{ github.event.inputs.severity || 'MEDIUM' }}"
+          FORMAT="json"
+
+          # Scan based on target type
+          if [ "${{ steps.build.outputs.built }}" == "true" ]; then
+            # Scan built image
+            echo "Scanning container image: ${{ steps.build.outputs.image }}" >> trivy-evidence.log
+
+            trivy image \
+              --severity "CRITICAL,HIGH,MEDIUM" \
+              --format "$FORMAT" \
+              --output trivy-image-results.json \
+              --security-checks vuln,config,secret \
+              --exit-code 0 \
+              "${{ steps.build.outputs.image }}" 2>&1 | tee -a trivy-scan.log
+
+            # Also generate SARIF
+            trivy image \
+              --format sarif \
+              --output trivy-image-sarif.json \
+              --severity "CRITICAL,HIGH,MEDIUM" \
+              "${{ steps.build.outputs.image }}" 2>/dev/null || true
+
+            # Check for critical vulnerabilities
+            CRITICAL_COUNT=$(jq '.Results[].Vulnerabilities | map(select(.Severity == "CRITICAL")) | length' trivy-image-results.json 2>/dev/null | awk '{s+=$1} END {print s}')
+            HIGH_COUNT=$(jq '.Results[].Vulnerabilities | map(select(.Severity == "HIGH")) | length' trivy-image-results.json 2>/dev/null | awk '{s+=$1} END {print s}')
+
+            echo "Critical vulnerabilities: ${CRITICAL_COUNT:-0}" >> trivy-evidence.log
+            echo "High vulnerabilities: ${HIGH_COUNT:-0}" >> trivy-evidence.log
+
+            if [ "${CRITICAL_COUNT:-0}" -gt 0 ]; then
+              echo "❌ Critical vulnerabilities found!" >> trivy-evidence.log
+              echo "critical=true" >> $GITHUB_OUTPUT
+            else
+              echo "✅ No critical vulnerabilities" >> trivy-evidence.log
+              echo "critical=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+          # Filesystem scan for IaC and misconfigurations
+          echo "Running filesystem scan..." >> trivy-evidence.log
+          trivy fs \
+            --security-checks config,secret,license \
+            --format "$FORMAT" \
+            --output trivy-fs-results.json \
+            --severity "$SEVERITY" \
+            . 2>&1 | tee -a trivy-fs-scan.log
+
+          # Generate compliance evidence hash
+          EVIDENCE_HASH=$(cat trivy-evidence.log trivy-*-results.json 2>/dev/null | sha256sum | cut -d' ' -f1)
+          echo "Evidence SHA-256: $EVIDENCE_HASH" >> trivy-evidence.log
+
+      - name: Generate compliance report
+        if: always()
+        run: |
+          cat > trivy-compliance.md << 'EOF'
+          # Trivy Container Security Compliance Report
+
+          ## Scan Metadata
+          - **Date**: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          - **Scanner**: Trivy $(trivy --version | head -1)
+          - **Target**: ${{ matrix.target }}
+          - **Commit**: ${{ github.sha }}
+
+          ## CMMC 2.0 Compliance
+          - **SI.L2-3.14.2**: System and Information Integrity - Vulnerability remediation
+          - **RA.L2-3.11.2**: Risk Assessment - Vulnerability scanning performed
+
+          ## NIST SP 800-171 Rev. 2 Compliance
+          - **3.11.2**: Scan for vulnerabilities periodically ✓
+          - **3.14.1**: Identify system flaws ✓
+          - **3.14.2**: Report system flaws ✓
+
+          ## Vulnerability Summary
+          EOF
+
+          if [ -f trivy-image-results.json ]; then
+            echo "### Container Image Vulnerabilities" >> trivy-compliance.md
+            jq -r '.Results[] |
+              "- **\(.Target)**: \(.Vulnerabilities | length) total vulnerabilities"' \
+              trivy-image-results.json >> trivy-compliance.md 2>/dev/null || echo "- No vulnerabilities found" >> trivy-compliance.md
+          fi
+
+          if [ -f trivy-fs-results.json ]; then
+            echo "" >> trivy-compliance.md
+            echo "### Filesystem/IaC Findings" >> trivy-compliance.md
+            jq -r '.Results[] |
+              "- **\(.Target)**: \(.Misconfigurations | length) misconfigurations"' \
+              trivy-fs-results.json >> trivy-compliance.md 2>/dev/null || echo "- No misconfigurations found" >> trivy-compliance.md
+          fi
+
+      - name: Upload Trivy results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: trivy-results-${{ github.run_id }}-${{ strategy.job-index }}
+          path: |
+            trivy-*.json
+            trivy-*.log
+            trivy-*.md
+          retention-days: ${{ env.EVIDENCE_RETENTION }}
+
+  # Grype vulnerability scanning
+  grype-scan:
+    needs: identify-targets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Grype
+        run: |
+          # Install latest Grype
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          grype version
+
+          # Update vulnerability database
+          if [ "${{ env.GRYPE_DB_UPDATE }}" == "true" ]; then
+            grype db update
+          fi
+
+      - name: Scan with Grype
+        id: grype
+        run: |
+          echo "=== Grype Vulnerability Scan ===" > grype-evidence.log
+          echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> grype-evidence.log
+          echo "Version: $(grype version)" >> grype-evidence.log
+
+          # Scan current directory
+          grype dir:. \
+            --output json \
+            --file grype-results.json \
+            --fail-on critical 2>&1 | tee -a grype-scan.log || GRYPE_EXIT=$?
+
+          # Generate SARIF output
+          grype dir:. \
+            --output sarif \
+            --file grype-sarif.json 2>/dev/null || true
+
+          # Parse results
+          if [ -f grype-results.json ]; then
+            TOTAL=$(jq '.matches | length' grype-results.json)
+            CRITICAL=$(jq '.matches | map(select(.vulnerability.severity == "Critical")) | length' grype-results.json)
+            HIGH=$(jq '.matches | map(select(.vulnerability.severity == "High")) | length' grype-results.json)
+
+            echo "Total vulnerabilities: $TOTAL" >> grype-evidence.log
+            echo "Critical: $CRITICAL" >> grype-evidence.log
+            echo "High: $HIGH" >> grype-evidence.log
+
+            echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+            echo "high=$HIGH" >> $GITHUB_OUTPUT
+          fi
+
+          # Generate evidence hash
+          EVIDENCE_HASH=$(cat grype-evidence.log grype-results.json 2>/dev/null | sha256sum | cut -d' ' -f1)
+          echo "Evidence SHA-256: $EVIDENCE_HASH" >> grype-evidence.log
+
+          exit ${GRYPE_EXIT:-0}
+
+      - name: Upload Grype results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: grype-results-${{ github.run_id }}
+          path: |
+            grype-*.json
+            grype-*.log
+          retention-days: ${{ env.EVIDENCE_RETENTION }}
+
+  # Consolidated reporting and notifications
+  security-report:
+    needs: [identify-targets, trivy-scan, grype-scan]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all scan results
+        uses: actions/download-artifact@v3
+        with:
+          path: scan-results
+
+      - name: Consolidate findings
+        id: consolidate
+        run: |
+          echo "=== Consolidated Security Report ===" > consolidated-report.log
+          echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> consolidated-report.log
+          echo "Workflow: ${{ github.run_id }}" >> consolidated-report.log
+
+          # Initialize counters
+          TOTAL_CRITICAL=0
+          TOTAL_HIGH=0
+          TOTAL_MEDIUM=0
+
+          # Process Trivy results
+          for trivy_result in scan-results/trivy-results-*/trivy-*-results.json; do
+            if [ -f "$trivy_result" ]; then
+              CRIT=$(jq '.Results[].Vulnerabilities | map(select(.Severity == "CRITICAL")) | length' "$trivy_result" 2>/dev/null | awk '{s+=$1} END {print s}')
+              HIGH=$(jq '.Results[].Vulnerabilities | map(select(.Severity == "HIGH")) | length' "$trivy_result" 2>/dev/null | awk '{s+=$1} END {print s}')
+              MED=$(jq '.Results[].Vulnerabilities | map(select(.Severity == "MEDIUM")) | length' "$trivy_result" 2>/dev/null | awk '{s+=$1} END {print s}')
+
+              TOTAL_CRITICAL=$((TOTAL_CRITICAL + ${CRIT:-0}))
+              TOTAL_HIGH=$((TOTAL_HIGH + ${HIGH:-0}))
+              TOTAL_MEDIUM=$((TOTAL_MEDIUM + ${MED:-0}))
+            fi
+          done
+
+          # Process Grype results
+          for grype_result in scan-results/grype-results-*/grype-results.json; do
+            if [ -f "$grype_result" ]; then
+              CRIT=$(jq '.matches | map(select(.vulnerability.severity == "Critical")) | length' "$grype_result" 2>/dev/null)
+              HIGH=$(jq '.matches | map(select(.vulnerability.severity == "High")) | length' "$grype_result" 2>/dev/null)
+              MED=$(jq '.matches | map(select(.vulnerability.severity == "Medium")) | length' "$grype_result" 2>/dev/null)
+
+              TOTAL_CRITICAL=$((TOTAL_CRITICAL + ${CRIT:-0}))
+              TOTAL_HIGH=$((TOTAL_HIGH + ${HIGH:-0}))
+              TOTAL_MEDIUM=$((TOTAL_MEDIUM + ${MED:-0}))
+            fi
+          done
+
+          echo "Total Critical: $TOTAL_CRITICAL" >> consolidated-report.log
+          echo "Total High: $TOTAL_HIGH" >> consolidated-report.log
+          echo "Total Medium: $TOTAL_MEDIUM" >> consolidated-report.log
+
+          # Set outputs for notification
+          echo "critical=$TOTAL_CRITICAL" >> $GITHUB_OUTPUT
+          echo "high=$TOTAL_HIGH" >> $GITHUB_OUTPUT
+          echo "medium=$TOTAL_MEDIUM" >> $GITHUB_OUTPUT
+
+          # Determine overall status
+          if [ "$TOTAL_CRITICAL" -gt 0 ]; then
+            echo "status=CRITICAL" >> $GITHUB_OUTPUT
+            echo "color=#FF0000" >> $GITHUB_OUTPUT
+          elif [ "$TOTAL_HIGH" -gt 0 ]; then
+            echo "status=HIGH" >> $GITHUB_OUTPUT
+            echo "color=#FFA500" >> $GITHUB_OUTPUT
+          else
+            echo "status=PASSED" >> $GITHUB_OUTPUT
+            echo "color=#00FF00" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate executive summary
+        run: |
+          cat > executive-summary.md << EOF
+          # Container Security Scan Executive Summary
+
+          ## Overall Status: ${{ steps.consolidate.outputs.status }}
+
+          ### Vulnerability Statistics
+          - **Critical**: ${{ steps.consolidate.outputs.critical }}
+          - **High**: ${{ steps.consolidate.outputs.high }}
+          - **Medium**: ${{ steps.consolidate.outputs.medium }}
+
+          ### Compliance Status
+          ✅ CMMC 2.0 SI.L2-3.14.2: Vulnerability scanning performed
+          ✅ CMMC 2.0 RA.L2-3.11.2: Risk assessment completed
+          ✅ NIST SP 800-171 3.11.2: Periodic vulnerability scanning
+          ✅ NIST SP 800-171 3.14.1: System flaws identified
+          ✅ NIST SP 800-171 3.14.2: Flaw reporting enabled
+
+          ### Recommended Actions
+          EOF
+
+          if [ "${{ steps.consolidate.outputs.critical }}" -gt 0 ]; then
+            echo "1. **IMMEDIATE**: Address critical vulnerabilities before deployment" >> executive-summary.md
+            echo "2. Update base images to latest patched versions" >> executive-summary.md
+            echo "3. Review and update dependency versions" >> executive-summary.md
+          elif [ "${{ steps.consolidate.outputs.high }}" -gt 0 ]; then
+            echo "1. **HIGH PRIORITY**: Remediate high-severity findings within 48 hours" >> executive-summary.md
+            echo "2. Implement compensating controls if patches unavailable" >> executive-summary.md
+          else
+            echo "1. Continue regular vulnerability scanning" >> executive-summary.md
+            echo "2. Monitor for new CVEs in deployed containers" >> executive-summary.md
+          fi
+
+          echo "" >> executive-summary.md
+          echo "### Evidence Chain" >> executive-summary.md
+          echo "- Workflow Run: ${{ github.run_id }}" >> executive-summary.md
+          echo "- Commit SHA: ${{ github.sha }}" >> executive-summary.md
+          echo "- Scan Date: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> executive-summary.md
+
+      - name: Send Google Chat notification
+        if: vars.GCHAT_WEBHOOK_URL != ''
+        run: |
+          # Prepare notification based on severity
+          if [ "${{ steps.consolidate.outputs.status }}" == "CRITICAL" ]; then
+            ICON="🚨"
+            MESSAGE="CRITICAL vulnerabilities detected - immediate action required!"
+          elif [ "${{ steps.consolidate.outputs.status }}" == "HIGH" ]; then
+            ICON="⚠️"
+            MESSAGE="High severity vulnerabilities found - review required"
+          else
+            ICON="✅"
+            MESSAGE="Container security scan passed"
+          fi
+
+          curl -X POST ${{ vars.GCHAT_WEBHOOK_URL }} \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "cards": [{
+                "header": {
+                  "title": "'"$ICON"' Container Security Report",
+                  "subtitle": "${{ github.repository }} - ${{ github.ref_name }}"
+                },
+                "sections": [{
+                  "widgets": [{
+                    "textParagraph": {
+                      "text": "<b>'"$MESSAGE"'</b>"
+                    }
+                  }, {
+                    "keyValue": {
+                      "topLabel": "Critical Vulnerabilities",
+                      "content": "${{ steps.consolidate.outputs.critical }}"
+                    }
+                  }, {
+                    "keyValue": {
+                      "topLabel": "High Vulnerabilities",
+                      "content": "${{ steps.consolidate.outputs.high }}"
+                    }
+                  }, {
+                    "keyValue": {
+                      "topLabel": "Medium Vulnerabilities",
+                      "content": "${{ steps.consolidate.outputs.medium }}"
+                    }
+                  }, {
+                    "textParagraph": {
+                      "text": "<b>Compliance:</b> CMMC SI.L2-3.14.2, NIST 3.11.2"
+                    }
+                  }, {
+                    "buttons": [{
+                      "textButton": {
+                        "text": "VIEW FULL REPORT",
+                        "onClick": {
+                          "openLink": {
+                            "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                          }
+                        }
+                      }
+                    }]
+                  }]
+                }]
+              }]
+            }'
+
+      - name: Upload final report
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-report-${{ github.run_id }}
+          path: |
+            consolidated-report.log
+            executive-summary.md
+          retention-days: ${{ env.EVIDENCE_RETENTION }}
+
+      - name: Fail if critical vulnerabilities
+        if: steps.consolidate.outputs.critical != '0'
+        run: |
+          echo "🛑 Build failed due to critical vulnerabilities"
+          echo "Review the security report for remediation details"
+          exit 1

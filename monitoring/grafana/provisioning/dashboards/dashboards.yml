@@ -1,0 +1,72 @@
+# Dashboard Provisioning Configuration
+# CMMC 2.0: AU.L2-3.3.1 - System auditing and logging
+# NIST SP 800-171: 3.3.1 - Audit and accountability
+
+apiVersion: 1
+
+providers:
+  - name: 'DevSecOps Dashboards'
+    orgId: 1
+    folder: 'DevSecOps Platform'
+    folderUid: devsecops
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 10
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards/devsecops
+
+  - name: 'Security Dashboards'
+    orgId: 1
+    folder: 'Security'
+    folderUid: security
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 10
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards/security
+
+  - name: 'Compliance Dashboards'
+    orgId: 1
+    folder: 'Compliance & Audit'
+    folderUid: compliance
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 10
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards/compliance
+
+  - name: 'Infrastructure Dashboards'
+    orgId: 1
+    folder: 'Infrastructure'
+    folderUid: infrastructure
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 10
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards/infrastructure
+
+  - name: 'CI/CD Dashboards'
+    orgId: 1
+    folder: 'CI/CD & GitOps'
+    folderUid: cicd
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 10
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards/cicd
+
+  - name: 'Cost Dashboards'
+    orgId: 1
+    folder: 'Cost Management'
+    folderUid: cost
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 10
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards/cost

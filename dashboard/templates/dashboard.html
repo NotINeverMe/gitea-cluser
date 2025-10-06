@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevSecOps Platform Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #1c2128;
+            --bg-hover: #21262d;
+            --border-color: #30363d;
+            --text-primary: #c9d1d9;
+            --text-secondary: #8b949e;
+            --accent-blue: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-yellow: #d29922;
+            --accent-red: #f85149;
+            --accent-purple: #bc8cff;
+            --accent-orange: #ff9500;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .header {
+            background: var(--bg-secondary);
+            padding: 2rem;
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .header-content {
+            max-width: 1600px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .header-icon {
+            font-size: 3rem;
+        }
+
+        .header-text h1 {
+            font-size: 2rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .header-text p {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .header-stats {
+            display: flex;
+            gap: 2rem;
+        }
+
+        .header-stat {
+            text-align: center;
+        }
+
+        .header-stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent-green);
+        }
+
+        .header-stat-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .filters {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .filter-group {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .filter-btn {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: all 0.2s;
+        }
+
+        .filter-btn:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+            border-color: var(--accent-blue);
+        }
+
+        .filter-btn.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: #fff;
+        }
+
+        .search-box {
+            flex: 1;
+            max-width: 400px;
+        }
+
+        .search-input {
+            width: 100%;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.875rem;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .container-card {
+            background: linear-gradient(135deg, var(--bg-secondary) 0%, #1a1f26 100%);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .container-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .container-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--accent-blue);
+            box-shadow: 0 8px 24px rgba(88, 166, 255, 0.15);
+        }
+
+        .container-card:hover::before {
+            opacity: 1;
+        }
+
+        .card-header {
+            display: flex;
+            align-items: start;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .card-icon {
+            font-size: 3rem;
+            line-height: 1;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+        }
+
+        .card-title-section {
+            flex: 1;
+        }
+
+        .card-name {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+            color: var(--text-primary);
+        }
+
+        .card-category {
+            font-size: 0.75rem;
+            color: var(--accent-blue);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            font-weight: 600;
+        }
+
+        .status-badge {
+            padding: 0.375rem 0.875rem;
+            border-radius: 16px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .status-badge::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.1); }
+        }
+
+        .status-running {
+            background: rgba(63, 185, 80, 0.2);
+            color: var(--accent-green);
+            border: 1px solid var(--accent-green);
+        }
+
+        .status-running::before {
+            background: var(--accent-green);
+        }
+
+        .status-exited {
+            background: rgba(248, 81, 73, 0.2);
+            color: var(--accent-red);
+            border: 1px solid var(--accent-red);
+        }
+
+        .status-exited::before {
+            background: var(--accent-red);
+            animation: none;
+        }
+
+        .status-created {
+            background: rgba(210, 153, 34, 0.2);
+            color: var(--accent-yellow);
+            border: 1px solid var(--accent-yellow);
+        }
+
+        .status-created::before {
+            background: var(--accent-yellow);
+        }
+
+        .card-description {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            margin-bottom: 1rem;
+            line-height: 1.5;
+        }
+
+        .access-url {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 0.75rem;
+            margin-bottom: 1rem;
+            font-size: 0.875rem;
+        }
+
+        .access-url strong {
+            color: var(--text-primary);
+            margin-right: 0.5rem;
+        }
+
+        .url-link {
+            color: var(--accent-blue);
+            text-decoration: none;
+            word-break: break-all;
+            transition: color 0.2s;
+        }
+
+        .url-link:hover {
+            color: #7ab8ff;
+            text-decoration: underline;
+        }
+
+        .card-info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .info-item {
+            background: var(--bg-tertiary);
+            padding: 0.75rem;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+        }
+
+        .info-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.25rem;
+        }
+
+        .info-value {
+            font-size: 1.125rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .info-value.good {
+            color: var(--accent-green);
+        }
+
+        .info-value.warning {
+            color: var(--accent-yellow);
+        }
+
+        .info-value.danger {
+            color: var(--accent-red);
+        }
+
+        .features-section {
+            margin-bottom: 1rem;
+        }
+
+        .features-title {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+
+        .features-list {
+            list-style: none;
+        }
+
+        .features-list li {
+            padding: 0.375rem 0;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .features-list li::before {
+            content: '✓';
+            color: var(--accent-green);
+            font-weight: bold;
+            font-size: 1rem;
+        }
+
+        .compliance-section {
+            margin-bottom: 1rem;
+        }
+
+        .compliance-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .compliance-tag {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--accent-purple);
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            color: var(--accent-purple);
+            font-family: 'Courier New', monospace;
+            font-weight: 600;
+        }
+
+        .card-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .btn {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.625rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 600;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .btn:hover {
+            background: var(--bg-hover);
+            border-color: var(--accent-blue);
+            transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-blue), #4a94e8);
+            border-color: var(--accent-blue);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #4a94e8, var(--accent-blue));
+            box-shadow: 0 4px 12px rgba(88, 166, 255, 0.3);
+        }
+
+        .btn-warning {
+            background: linear-gradient(135deg, var(--accent-yellow), #c88a1e);
+            border-color: var(--accent-yellow);
+            color: #000;
+        }
+
+        .btn-warning:hover {
+            background: linear-gradient(135deg, #c88a1e, var(--accent-yellow));
+            box-shadow: 0 4px 12px rgba(210, 153, 34, 0.3);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, var(--accent-red), #d93633);
+            border-color: var(--accent-red);
+            color: #fff;
+        }
+
+        .btn-danger:hover {
+            background: linear-gradient(135deg, #d93633, var(--accent-red));
+            box-shadow: 0 4px 12px rgba(248, 81, 73, 0.3);
+        }
+
+        .btn-full {
+            grid-column: 1 / -1;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 4rem;
+            color: var(--text-secondary);
+            font-size: 1.125rem;
+        }
+
+        .loading::after {
+            content: '...';
+            animation: loadingDots 1.5s infinite;
+        }
+
+        @keyframes loadingDots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+
+        .error {
+            background: rgba(248, 81, 73, 0.15);
+            border: 1px solid var(--accent-red);
+            color: var(--accent-red);
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            max-width: 900px;
+            max-height: 80vh;
+            width: 90%;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .modal-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0.25rem 0.5rem;
+            line-height: 1;
+        }
+
+        .modal-close:hover {
+            color: var(--text-primary);
+        }
+
+        .modal-body {
+            padding: 1.5rem;
+            overflow-y: auto;
+        }
+
+        .logs-container {
+            background: #000;
+            color: #0f0;
+            font-family: 'Courier New', monospace;
+            font-size: 0.75rem;
+            padding: 1rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 500px;
+            line-height: 1.4;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: var(--text-secondary);
+        }
+
+        .empty-state-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        .empty-state-text {
+            font-size: 1.125rem;
+        }
+
+        @media (max-width: 768px) {
+            .cards-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header-stats {
+                display: none;
+            }
+
+            .filters {
+                flex-direction: column;
+            }
+
+            .search-box {
+                max-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-content">
+            <div class="header-title">
+                <div class="header-icon">🚀</div>
+                <div class="header-text">
+                    <h1>DevSecOps Platform</h1>
+                    <p>Container Management Dashboard • Last updated: <span id="lastUpdate">Never</span></p>
+                </div>
+            </div>
+            <div class="header-stats">
+                <div class="header-stat">
+                    <div class="header-stat-value" id="containersRunning">-</div>
+                    <div class="header-stat-label">Running</div>
+                </div>
+                <div class="header-stat">
+                    <div class="header-stat-value" id="cpuUsage">-</div>
+                    <div class="header-stat-label">CPU</div>
+                </div>
+                <div class="header-stat">
+                    <div class="header-stat-value" id="memoryUsage">-</div>
+                    <div class="header-stat-label">Memory</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="container">
+        <!-- Filters -->
+        <div class="filters">
+            <div class="filter-group">
+                <button class="filter-btn active" data-filter="all">All Containers</button>
+                <button class="filter-btn" data-filter="running">Running</button>
+                <button class="filter-btn" data-filter="stopped">Stopped</button>
+            </div>
+            <div class="filter-group">
+                <button class="filter-btn" data-category="all">All Categories</button>
+                <button class="filter-btn" data-category="Git Repository">Git</button>
+                <button class="filter-btn" data-category="Security Scanning">Security</button>
+                <button class="filter-btn" data-category="Automation">Automation</button>
+                <button class="filter-btn" data-category="Monitoring">Monitoring</button>
+                <button class="filter-btn" data-category="GitOps">GitOps</button>
+            </div>
+            <div class="search-box">
+                <input type="text" class="search-input" id="searchInput" placeholder="🔍 Search containers...">
+            </div>
+        </div>
+
+        <!-- Cards Grid -->
+        <div class="cards-grid" id="cardsGrid">
+            <div class="loading">Loading containers</div>
+        </div>
+    </div>
+
+    <!-- Logs Modal -->
+    <div class="modal" id="logsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title" id="logsTitle">Container Logs</div>
+                <button class="modal-close" onclick="closeLogsModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="logs-container" id="logsContent">Loading logs...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allContainers = [];
+        let currentFilter = 'all';
+        let currentCategory = 'all';
+        let searchQuery = '';
+
+        // Filter buttons
+        document.querySelectorAll('[data-filter]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                currentFilter = e.target.dataset.filter;
+                renderCards();
+            });
+        });
+
+        document.querySelectorAll('[data-category]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('[data-category]').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                currentCategory = e.target.dataset.category;
+                renderCards();
+            });
+        });
+
+        document.getElementById('searchInput').addEventListener('input', (e) => {
+            searchQuery = e.target.value.toLowerCase();
+            renderCards();
+        });
+
+        async function fetchSystemStats() {
+            try {
+                const response = await fetch('/api/system');
+                const data = await response.json();
+
+                document.getElementById('containersRunning').textContent = data.docker.containers_running;
+                document.getElementById('cpuUsage').textContent = data.cpu_percent.toFixed(1) + '%';
+                document.getElementById('memoryUsage').textContent = data.memory_used_gb.toFixed(1) + 'GB';
+            } catch (error) {
+                console.error('Error fetching system stats:', error);
+            }
+        }
+
+        async function fetchContainers() {
+            try {
+                const response = await fetch('/api/containers');
+                allContainers = await response.json();
+                renderCards();
+            } catch (error) {
+                console.error('Error fetching containers:', error);
+                document.getElementById('cardsGrid').innerHTML = '<div class="error">Error loading containers: ' + error.message + '</div>';
+            }
+        }
+
+        function renderCards() {
+            const grid = document.getElementById('cardsGrid');
+
+            // Filter containers
+            let filtered = allContainers.filter(container => {
+                // Status filter
+                if (currentFilter === 'running' && container.status !== 'running') return false;
+                if (currentFilter === 'stopped' && container.status === 'running') return false;
+
+                // Category filter
+                const category = container.tool_info?.category || 'Container';
+                if (currentCategory !== 'all' && category !== currentCategory) return false;
+
+                // Search filter
+                if (searchQuery) {
+                    const name = (container.tool_info?.name || container.name).toLowerCase();
+                    const description = (container.tool_info?.description || '').toLowerCase();
+                    if (!name.includes(searchQuery) && !description.includes(searchQuery)) return false;
+                }
+
+                return true;
+            });
+
+            if (filtered.length === 0) {
+                grid.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📦</div>
+                        <div class="empty-state-text">No containers found</div>
+                    </div>
+                `;
+                return;
+            }
+
+            grid.innerHTML = filtered.map(container => createCard(container)).join('');
+        }
+
+        function createCard(container) {
+            const tool = container.tool_info || {};
+            const statusClass = container.status === 'running' ? 'status-running' :
+                              container.status === 'exited' ? 'status-exited' : 'status-created';
+
+            let accessUrlHtml = '';
+            if (tool.access_url) {
+                // Determine if URL should be clickable
+                const isClickable = !tool.access_url.includes('N/A');
+                if (isClickable) {
+                    accessUrlHtml = `
+                        <div class="access-url">
+                            <strong>🔗 Access:</strong>
+                            <a href="${tool.access_url}" target="_blank" class="url-link">${tool.access_url}</a>
+                        </div>
+                    `;
+                } else {
+                    accessUrlHtml = `
+                        <div class="access-url">
+                            <strong>🔗 Access:</strong>
+                            <span style="color: var(--text-secondary);">${tool.access_url}</span>
+                        </div>
+                    `;
+                }
+            }
+
+            let statsHtml = '';
+            if (container.stats && container.status === 'running') {
+                const cpuClass = container.stats.cpu_percent > 80 ? 'danger' : container.stats.cpu_percent > 60 ? 'warning' : 'good';
+                const memClass = container.stats.mem_percent > 80 ? 'danger' : container.stats.mem_percent > 60 ? 'warning' : 'good';
+
+                statsHtml = `
+                    <div class="card-info-grid">
+                        <div class="info-item">
+                            <div class="info-label">CPU Usage</div>
+                            <div class="info-value ${cpuClass}">${container.stats.cpu_percent.toFixed(1)}%</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Memory</div>
+                            <div class="info-value ${memClass}">${container.stats.mem_usage_mb} MB</div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            let featuresHtml = '';
+            if (tool.features && tool.features.length > 0) {
+                featuresHtml = `
+                    <div class="features-section">
+                        <div class="features-title">Key Features</div>
+                        <ul class="features-list">
+                            ${tool.features.slice(0, 4).map(f => `<li>${f}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            }
+
+            let complianceHtml = '';
+            if (tool.compliance && tool.compliance.length > 0) {
+                complianceHtml = `
+                    <div class="compliance-section">
+                        <div class="features-title">CMMC Controls</div>
+                        <div class="compliance-tags">
+                            ${tool.compliance.map(c => `<span class="compliance-tag">${c}</span>`).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
+            const isRunning = container.status === 'running';
+
+            return `
+                <div class="container-card" data-status="${container.status}" data-category="${tool.category || 'Container'}">
+                    <div class="card-header">
+                        <div class="card-icon">${tool.icon || '📦'}</div>
+                        <div class="card-title-section">
+                            <div class="card-name">${tool.name || container.name}</div>
+                            <div class="card-category">${tool.category || 'Container'}</div>
+                        </div>
+                        <span class="status-badge ${statusClass}">${container.status}</span>
+                    </div>
+
+                    ${tool.description ? `<div class="card-description">${tool.description}</div>` : ''}
+
+                    ${accessUrlHtml}
+
+                    ${statsHtml}
+                    ${featuresHtml}
+                    ${complianceHtml}
+
+                    <div class="card-actions">
+                        ${!isRunning ? `<button class="btn btn-primary" onclick="containerAction('${container.name}', 'start')">▶ Start</button>` : ''}
+                        ${isRunning ? `<button class="btn btn-warning" onclick="containerAction('${container.name}', 'restart')">⟳ Restart</button>` : ''}
+                        ${isRunning ? `<button class="btn btn-danger" onclick="containerAction('${container.name}', 'stop')">⏹ Stop</button>` : ''}
+                        <button class="btn ${!isRunning ? 'btn-full' : ''}" onclick="viewLogs('${container.name}', '${tool.name || container.name}')">📄 View Logs</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function containerAction(name, action) {
+            try {
+                const response = await fetch(`/api/action/${name}/${action}`);
+                const result = await response.json();
+
+                if (result.success) {
+                    // Immediately update UI
+                    fetchContainers();
+                    // Show brief notification
+                    showNotification(result.message, 'success');
+                } else {
+                    showNotification('Error: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Error: ' + error.message, 'error');
+            }
+        }
+
+        function viewLogs(name, displayName) {
+            document.getElementById('logsTitle').textContent = displayName + ' - Container Logs';
+            document.getElementById('logsContent').textContent = 'Loading logs...';
+            document.getElementById('logsModal').classList.add('active');
+
+            fetch(`/api/logs/${name}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.logs) {
+                        document.getElementById('logsContent').textContent = data.logs || 'No logs available';
+                    } else {
+                        document.getElementById('logsContent').textContent = 'Error: ' + data.error;
+                    }
+                })
+                .catch(err => {
+                    document.getElementById('logsContent').textContent = 'Error loading logs: ' + err.message;
+                });
+        }
+
+        function closeLogsModal() {
+            document.getElementById('logsModal').classList.remove('active');
+        }
+
+        // Close modal on background click
+        document.getElementById('logsModal').addEventListener('click', (e) => {
+            if (e.target.id === 'logsModal') {
+                closeLogsModal();
+            }
+        });
+
+        // Close modal on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeLogsModal();
+            }
+        });
+
+        function showNotification(message, type) {
+            // Simple notification (you can enhance this)
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: ${type === 'success' ? 'var(--accent-green)' : 'var(--accent-red)'};
+                color: white;
+                padding: 1rem 1.5rem;
+                border-radius: 8px;
+                z-index: 10000;
+                animation: slideIn 0.3s ease;
+            `;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        }
+
+        function updateLastUpdateTime() {
+            const now = new Date();
+            document.getElementById('lastUpdate').textContent = now.toLocaleTimeString();
+        }
+
+        function refreshData() {
+            fetchSystemStats();
+            fetchContainers();
+            updateLastUpdateTime();
+        }
+
+        // Initial load
+        refreshData();
+
+        // Auto-refresh every 5 seconds
+        setInterval(refreshData, 5000);
+
+        // Add simple animations
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes slideIn {
+                from { transform: translateX(100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes slideOut {
+                from { transform: translateX(0); opacity: 1; }
+                to { transform: translateX(100%); opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
+    </script>
+</body>
+</html>

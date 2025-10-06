@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://gitea.devsecops.local/schemas/evidence-artifact.json",
+  "title": "Evidence Artifact Schema",
+  "description": "Schema for GCP evidence collection artifacts",
+  "type": "object",
+  "required": [
+    "evidence_id",
+    "timestamp",
+    "control_framework",
+    "control_ids",
+    "collection_method",
+    "source",
+    "artifact_type",
+    "data",
+    "hash",
+    "collector_version",
+    "gcp_project"
+  ],
+  "properties": {
+    "evidence_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this evidence artifact"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp when evidence was collected"
+    },
+    "control_framework": {
+      "type": "string",
+      "enum": ["CMMC_2.0", "NIST_800-171_R2", "NIST_800-53_R5", "ISO_27001"],
+      "description": "Control framework this evidence supports"
+    },
+    "control_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z]{2,3}\\.[A-Z0-9]+-[0-9]+\\.[0-9]+\\.[0-9]+$"
+      },
+      "minItems": 1,
+      "description": "List of control IDs this evidence supports"
+    },
+    "collection_method": {
+      "type": "string",
+      "enum": ["automated", "manual", "hybrid"],
+      "description": "Method used to collect this evidence"
+    },
+    "source": {
+      "type": "string",
+      "description": "Source system or service that provided this evidence"
+    },
+    "artifact_type": {
+      "type": "string",
+      "description": "Type of evidence artifact"
+    },
+    "data": {
+      "type": "object",
+      "description": "The actual evidence data collected"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA-256 hash of the data field for integrity verification"
+    },
+    "collector_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Version of the collector that generated this evidence"
+    },
+    "gcp_project": {
+      "type": "string",
+      "description": "GCP project ID where evidence was collected"
+    },
+    "gcp_organization": {
+      "type": "string",
+      "description": "GCP organization ID (optional)"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Additional metadata about the evidence collection",
+      "properties": {
+        "collector_name": {
+          "type": "string"
+        },
+        "collection_duration_ms": {
+          "type": "number"
+        },
+        "collection_errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

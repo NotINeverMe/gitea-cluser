@@ -1,0 +1,168 @@
+# Recording Rules for Pre-aggregated Metrics
+# CMMC 2.0: SI.L2-3.14.4 - System Monitoring
+# NIST SP 800-171: 3.14.4 - System and Information Integrity
+
+groups:
+  - name: aggregated_metrics
+    interval: 30s
+    rules:
+      # Security metrics aggregation
+      - record: security:vulnerability_total_by_severity
+        expr: |
+          sum by (severity) (security_scan_vulnerability_count)
+
+      - record: security:cvss_score_p95
+        expr: |
+          histogram_quantile(0.95, rate(security_scan_cvss_score_bucket[5m]))
+
+      - record: security:scan_duration_seconds_avg
+        expr: |
+          avg(security_scan_duration_seconds)
+
+      - record: security:vulnerability_trend_daily
+        expr: |
+          avg_over_time(security:vulnerability_total_by_severity[1d])
+
+      - record: security:mttr_vulnerabilities_hours
+        expr: |
+          avg(time() - security_vulnerability_discovered_timestamp) / 3600
+
+      # Compliance metrics aggregation
+      - record: compliance:control_coverage_by_framework
+        expr: |
+          sum by (framework) (compliance_control_implemented) /
+          sum by (framework) (compliance_control_total)
+
+      - record: compliance:evidence_freshness_days
+        expr: |
+          (time() - compliance_evidence_last_updated) / 86400
+
+      - record: compliance:assessment_readiness_score
+        expr: |
+          (sum(compliance_control_implemented{required="true"}) /
+           sum(compliance_control_total{required="true"})) * 100
+
+      - record: compliance:policy_violation_rate_hourly
+        expr: |
+          rate(compliance_policy_violations_total[1h])
+
+      # Performance metrics aggregation
+      - record: performance:cpu_usage_avg
+        expr: |
+          100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+
+      - record: performance:memory_usage_percent
+        expr: |
+          100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))
+
+      - record: performance:disk_usage_percent
+        expr: |
+          100 * (1 - (node_filesystem_avail_bytes / node_filesystem_size_bytes))
+
+      - record: performance:network_throughput_bytes
+        expr: |
+          rate(node_network_receive_bytes_total[5m]) +
+          rate(node_network_transmit_bytes_total[5m])
+
+      # CI/CD metrics aggregation
+      - record: cicd:pipeline_success_rate
+        expr: |
+          1 - (rate(ci_pipeline_failures_total[1h]) / rate(ci_pipeline_runs_total[1h]))
+
+      - record: cicd:build_duration_p50
+        expr: |
+          histogram_quantile(0.5, rate(ci_build_duration_seconds_bucket[1h]))
+
+      - record: cicd:build_duration_p95
+        expr: |
+          histogram_quantile(0.95, rate(ci_build_duration_seconds_bucket[1h]))
+
+      - record: cicd:deployment_frequency_daily
+        expr: |
+          increase(ci_deployments_total[1d])
+
+      - record: cicd:security_gate_pass_rate
+        expr: |
+          rate(ci_security_gate_passed_total[1h]) /
+          rate(ci_security_gate_total[1h])
+
+      # GCP metrics aggregation
+      - record: gcp:compute_instance_utilization
+        expr: |
+          avg(stackdriver_gce_instance_cpu_utilization)
+
+      - record: gcp:storage_usage_bytes_total
+        expr: |
+          sum(stackdriver_gcs_bucket_total_bytes)
+
+      - record: gcp:api_request_rate
+        expr: |
+          sum(rate(stackdriver_api_request_count[5m]))
+
+      - record: gcp:estimated_monthly_cost
+        expr: |
+          sum(stackdriver_billing_cost_estimate)
+
+      # n8n workflow metrics
+      - record: n8n:workflow_success_rate
+        expr: |
+          1 - (rate(n8n_workflow_failures_total[1h]) / rate(n8n_workflow_executions_total[1h]))
+
+      - record: n8n:workflow_execution_duration_avg
+        expr: |
+          avg(n8n_workflow_execution_duration_seconds)
+
+      - record: n8n:event_processing_backlog
+        expr: |
+          sum(n8n_event_queue_size)
+
+      # Availability metrics
+      - record: availability:service_uptime_percent
+        expr: |
+          avg_over_time(up[24h]) * 100
+
+      - record: availability:endpoint_availability
+        expr: |
+          avg by (instance) (probe_success)
+
+      - record: availability:mtbf_hours
+        expr: |
+          (time() - container_start_time_seconds) / 3600
+
+      # Cost optimization metrics
+      - record: cost:per_build_dollars
+        expr: |
+          infracost_build_cost_estimate
+
+      - record: cost:resource_utilization_efficiency
+        expr: |
+          (performance:cpu_usage_avg * 0.5 + performance:memory_usage_percent * 0.5) / 100
+
+      - record: cost:idle_resource_percent
+        expr: |
+          100 * (count(performance:cpu_usage_avg < 10) / count(performance:cpu_usage_avg))
+
+  - name: sla_metrics
+    interval: 60s
+    rules:
+      # SLA tracking
+      - record: sla:availability_30d
+        expr: |
+          avg_over_time(availability:service_uptime_percent[30d])
+
+      - record: sla:security_response_time_hours
+        expr: |
+          histogram_quantile(0.95, rate(security_incident_response_time_bucket[24h]))
+
+      - record: sla:vulnerability_remediation_compliance
+        expr: |
+          100 * (sum(compliance_vulnerability_remediated_on_time) /
+                 sum(compliance_vulnerability_total))
+
+      - record: sla:backup_success_rate_7d
+        expr: |
+          avg_over_time(backup_success[7d]) * 100
+
+      - record: sla:audit_compliance_score
+        expr: |
+          compliance:assessment_readiness_score

@@ -1,0 +1,150 @@
+version: '3.8'
+
+services:
+  # Security Command Center Collector
+  scc-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collectors
+    container_name: gcp-scc-collector
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/config/gcp-service-account.json
+    volumes:
+      - ./config:/app/config:ro
+      - ./output:/app/output
+      - ./logs:/app/logs
+    command: >
+      sh -c "
+        while true; do
+          python3 /app/gcp-scc-collector.py --config /app/config/evidence-config.yaml
+          sleep 86400
+        done
+      "
+    restart: unless-stopped
+    networks:
+      - evidence-network
+
+  # Asset Inventory Collector
+  asset-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collectors
+    container_name: gcp-asset-collector
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/config/gcp-service-account.json
+    volumes:
+      - ./config:/app/config:ro
+      - ./output:/app/output
+      - ./logs:/app/logs
+    command: >
+      sh -c "
+        sleep 3600
+        while true; do
+          python3 /app/gcp-asset-inventory.py --config /app/config/evidence-config.yaml
+          sleep 604800
+        done
+      "
+    restart: unless-stopped
+    networks:
+      - evidence-network
+
+  # IAM Evidence Collector
+  iam-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collectors
+    container_name: gcp-iam-collector
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/config/gcp-service-account.json
+    volumes:
+      - ./config:/app/config:ro
+      - ./output:/app/output
+      - ./logs:/app/logs
+    command: >
+      sh -c "
+        sleep 7200
+        while true; do
+          python3 /app/gcp-iam-evidence.py --config /app/config/evidence-config.yaml
+          sleep 604800
+        done
+      "
+    restart: unless-stopped
+    networks:
+      - evidence-network
+
+  # Encryption Auditor
+  encryption-auditor:
+    build:
+      context: .
+      dockerfile: Dockerfile.collectors
+    container_name: gcp-encryption-auditor
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/config/gcp-service-account.json
+    volumes:
+      - ./config:/app/config:ro
+      - ./output:/app/output
+      - ./logs:/app/logs
+    command: >
+      sh -c "
+        sleep 10800
+        while true; do
+          python3 /app/gcp-encryption-audit.py --config /app/config/evidence-config.yaml
+          sleep 604800
+        done
+      "
+    restart: unless-stopped
+    networks:
+      - evidence-network
+
+  # Manifest Generator
+  manifest-generator:
+    build:
+      context: .
+      dockerfile: Dockerfile.collectors
+    container_name: evidence-manifest-generator
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./config:/app/config:ro
+      - ./output:/app/output
+      - ./manifests:/app/manifests
+      - ./logs:/app/logs
+    command: >
+      sh -c "
+        sleep 14400
+        while true; do
+          python3 /app/manifest-generator.py --evidence-dir /app/output
+          sleep 86400
+        done
+      "
+    restart: unless-stopped
+    networks:
+      - evidence-network
+
+  # Prometheus Exporter for Monitoring
+  evidence-metrics:
+    build:
+      context: .
+      dockerfile: Dockerfile.metrics
+    container_name: evidence-metrics-exporter
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./output:/app/output:ro
+      - ./manifests:/app/manifests:ro
+      - ./logs:/app/logs:ro
+    restart: unless-stopped
+    networks:
+      - evidence-network
+
+networks:
+  evidence-network:
+    driver: bridge
+
+volumes:
+  evidence-data:
+    driver: local

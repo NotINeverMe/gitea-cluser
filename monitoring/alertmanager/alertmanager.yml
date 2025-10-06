@@ -1,0 +1,223 @@
+# Alertmanager Configuration for Google Chat Integration
+# CMMC 2.0: IR.L2-3.6.1 - Incident Response
+# NIST SP 800-171: 3.6.1 - Incident Response
+# NIST SP 800-53: IR-4 - Incident Handling
+
+global:
+  # Resolved alert retention
+  resolve_timeout: 5m
+
+  # Google Chat webhook configuration
+  http_config:
+    tls_config:
+      insecure_skip_verify: false
+
+# Alert routing tree
+route:
+  # Default parameters
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+  receiver: 'monitoring-alerts'
+
+  # Child routes for severity-based routing
+  routes:
+    # Critical security alerts
+    - matchers:
+        - severity="critical"
+        - category="security"
+      receiver: 'security-alerts'
+      group_wait: 0s
+      repeat_interval: 1h
+      continue: true
+
+    # Critical compliance alerts
+    - matchers:
+        - severity="critical"
+        - category="compliance"
+      receiver: 'compliance-alerts'
+      group_wait: 0s
+      repeat_interval: 2h
+      continue: true
+
+    # Critical operational alerts
+    - matchers:
+        - severity="critical"
+        - category=~"availability|database|backup"
+      receiver: 'critical-ops-alerts'
+      group_wait: 0s
+      repeat_interval: 30m
+
+    # Warning alerts
+    - matchers:
+        - severity="warning"
+      receiver: 'monitoring-alerts'
+      group_wait: 30s
+      repeat_interval: 4h
+
+    # Cost alerts
+    - matchers:
+        - category="cost"
+      receiver: 'cost-alerts'
+      group_wait: 5m
+      repeat_interval: 24h
+
+    # CI/CD alerts
+    - matchers:
+        - category=~"cicd|gitops"
+      receiver: 'devops-alerts'
+      group_wait: 1m
+      repeat_interval: 2h
+
+# Inhibition rules - suppress lower priority alerts when higher priority fires
+inhibit_rules:
+  # Suppress warnings when critical alert is firing for same service
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: ['alertname', 'instance', 'service']
+
+  # Suppress availability alerts during maintenance
+  - source_matchers:
+      - alertname="MaintenanceMode"
+    target_matchers:
+      - category="availability"
+    equal: ['instance']
+
+# Alert receivers configuration
+receivers:
+  # Default monitoring alerts channel
+  - name: 'monitoring-alerts'
+    webhook_configs:
+      - url: '${GCHAT_WEBHOOK_MONITORING}'
+        send_resolved: true
+        http_config:
+          tls_config:
+            insecure_skip_verify: false
+        title: 'DevSecOps Alert'
+        text: |
+          *Alert:* {{ .GroupLabels.alertname }}
+          *Severity:* {{ .CommonLabels.severity }}
+          *Category:* {{ .CommonLabels.category }}
+
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Compliance:* {{ .Labels.compliance }}
+          {{ if .Annotations.runbook_url }}*Runbook:* <{{ .Annotations.runbook_url }}|View Runbook>{{ end }}
+          {{ if .Annotations.dashboard_url }}*Dashboard:* <{{ .Annotations.dashboard_url }}|View Dashboard>{{ end }}
+          ---
+          {{ end }}
+
+  # Security alerts channel
+  - name: 'security-alerts'
+    webhook_configs:
+      - url: '${GCHAT_WEBHOOK_SECURITY}'
+        send_resolved: true
+        title: '🚨 CRITICAL SECURITY ALERT'
+        text: |
+          *🚨 SECURITY INCIDENT DETECTED*
+
+          *Alert:* {{ .GroupLabels.alertname }}
+          *Severity:* CRITICAL
+          *Time:* {{ .Alerts.StartsAt }}
+
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Details:* {{ .Annotations.description }}
+          *Compliance Controls:* {{ .Labels.compliance }}
+          {{ if .Annotations.runbook_url }}*Response Procedure:* <{{ .Annotations.runbook_url }}|Execute Runbook>{{ end }}
+          {{ if .Annotations.evidence_path }}*Evidence Location:* {{ .Annotations.evidence_path }}{{ end }}
+
+          *Required Actions:*
+          1. Acknowledge incident in incident tracking system
+          2. Follow security runbook procedures
+          3. Document all actions taken
+          4. Update evidence collection
+          ---
+          {{ end }}
+
+  # Compliance alerts channel
+  - name: 'compliance-alerts'
+    webhook_configs:
+      - url: '${GCHAT_WEBHOOK_COMPLIANCE}'
+        send_resolved: true
+        title: '⚠️ COMPLIANCE VIOLATION'
+        text: |
+          *COMPLIANCE ALERT*
+
+          *Issue:* {{ .GroupLabels.alertname }}
+          *Framework:* {{ .CommonLabels.compliance }}
+
+          {{ range .Alerts }}
+          *Violation:* {{ .Annotations.summary }}
+          *Impact:* {{ .Annotations.description }}
+          *Controls Affected:* {{ .Labels.compliance }}
+          {{ if .Annotations.evidence_path }}*Evidence Path:* {{ .Annotations.evidence_path }}{{ end }}
+          {{ if .Annotations.dashboard_url }}*Compliance Dashboard:* <{{ .Annotations.dashboard_url }}|View Status>{{ end }}
+
+          *Remediation Required:*
+          - Address violation immediately
+          - Update compliance documentation
+          - Collect remediation evidence
+          ---
+          {{ end }}
+
+  # Critical operations alerts
+  - name: 'critical-ops-alerts'
+    webhook_configs:
+      - url: '${GCHAT_WEBHOOK_CRITICAL}'
+        send_resolved: true
+        title: '🔥 CRITICAL OPERATIONAL ISSUE'
+        text: |
+          *CRITICAL SYSTEM ALERT*
+
+          *Service:* {{ .GroupLabels.service }}
+          *Alert:* {{ .GroupLabels.alertname }}
+
+          {{ range .Alerts }}
+          *Issue:* {{ .Annotations.summary }}
+          *Impact:* {{ .Annotations.description }}
+          {{ if .Annotations.runbook_url }}*Runbook:* <{{ .Annotations.runbook_url }}|Emergency Response>{{ end }}
+
+          *Immediate Action Required*
+          ---
+          {{ end }}
+
+  # Cost alerts channel
+  - name: 'cost-alerts'
+    webhook_configs:
+      - url: '${GCHAT_WEBHOOK_COST}'
+        send_resolved: false
+        title: '💰 Cost Alert'
+        text: |
+          *Cost Threshold Alert*
+
+          {{ range .Alerts }}
+          *Issue:* {{ .Annotations.summary }}
+          *Details:* {{ .Annotations.description }}
+          {{ if .Annotations.dashboard_url }}*Cost Analysis:* <{{ .Annotations.dashboard_url }}|View Dashboard>{{ end }}
+          ---
+          {{ end }}
+
+  # DevOps alerts channel
+  - name: 'devops-alerts'
+    webhook_configs:
+      - url: '${GCHAT_WEBHOOK_DEVOPS}'
+        send_resolved: true
+        title: '🔧 DevOps Alert'
+        text: |
+          *CI/CD Pipeline Alert*
+
+          {{ range .Alerts }}
+          *Issue:* {{ .Annotations.summary }}
+          *Details:* {{ .Annotations.description }}
+          {{ if .Annotations.dashboard_url }}*Pipeline Dashboard:* <{{ .Annotations.dashboard_url }}|View Status>{{ end }}
+          ---
+          {{ end }}
+
+# Alert templates
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'

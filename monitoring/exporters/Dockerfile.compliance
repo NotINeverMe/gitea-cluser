@@ -1,0 +1,42 @@
+# Compliance Exporter Dockerfile
+# CMMC 2.0: CA.L2-3.12.1 - Security Assessment
+# NIST SP 800-53: CA-2 - Security Assessments
+
+FROM python:3.11-slim
+
+# Install dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r exporter && useradd -r -g exporter exporter
+
+# Set working directory
+WORKDIR /app
+
+# Create config and evidence directories
+RUN mkdir -p /app/config /app/evidence && chown -R exporter:exporter /app
+
+# Copy requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy exporter script
+COPY compliance-exporter.py .
+RUN chmod +x compliance-exporter.py
+
+# Switch to non-root user
+USER exporter
+
+# Expose metrics port
+EXPOSE 9202
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:9202/metrics || exit 1
+
+# Run exporter
+CMD ["python", "-u", "compliance-exporter.py"]

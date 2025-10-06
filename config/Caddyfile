@@ -1,0 +1,76 @@
+{$DOMAIN:n8n.example.com} {
+    # TLS Configuration
+    tls {$EMAIL:admin@example.com}
+
+    # Security Headers
+    header {
+        # HSTS
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+
+        # Security Headers
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+
+        # Content Security Policy
+        Content-Security-Policy "default-src 'self' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; frame-ancestors 'self';"
+
+        # Remove server header
+        -Server
+    }
+
+    # Rate limiting
+    rate_limit {
+        zone dynamic {
+            key {remote_host}
+            events 100
+            window 1m
+        }
+    }
+
+    # Basic authentication for additional security (optional)
+    # basicauth /webhook/* {
+    #     webhook_user $2a$14$Zkx19XLiW6VYouLHR5NmfOFU0z2GTNmpkT/5qqR7hx4IjWJPDhjvG
+    # }
+
+    # Logging
+    log {
+        output file /data/access.log {
+            roll_size 100mb
+            roll_keep 5
+            roll_keep_for 720h
+        }
+        format json
+    }
+
+    # Reverse proxy to n8n
+    reverse_proxy n8n:5678 {
+        # WebSocket support
+        header_up Upgrade {http.request.header.Upgrade}
+        header_up Connection {http.request.header.Connection}
+
+        # Health check
+        health_uri /healthz
+        health_interval 30s
+        health_timeout 5s
+        health_status 200
+
+        # Timeouts for long-running workflows
+        flush_interval -1
+        transport http {
+            read_timeout 900s
+            write_timeout 900s
+        }
+    }
+
+    # Metrics endpoint (optional)
+    handle /metrics {
+        metrics /metrics
+    }
+
+    # Health check endpoint
+    handle /health {
+        respond "OK" 200
+    }
+}

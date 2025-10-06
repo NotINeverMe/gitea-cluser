@@ -1,0 +1,61 @@
+version: '3.8'
+
+# DevSecOps Platform Management Dashboard
+# Web-based dark mode dashboard for cluster monitoring
+
+services:
+  dashboard:
+    build: .
+    container_name: devsecops-dashboard
+    restart: unless-stopped
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      # Mount Docker socket for container management
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Mount for persistent data (if needed)
+      - dashboard_data:/app/data
+
+    networks:
+      - gitea_default
+      - gitea_monitoring
+
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+
+    labels:
+      - "com.devsecops.component=dashboard"
+      - "com.devsecops.tier=management"
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`dashboard.localhost`)"
+      - "traefik.http.services.dashboard.loadbalancer.server.port=8000"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+volumes:
+  dashboard_data:
+    name: dashboard_data
+
+networks:
+  gitea_default:
+    external: true
+  gitea_monitoring:
+    external: true

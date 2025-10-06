@@ -1,0 +1,154 @@
+# Atlantis Repository Allowlist Configuration
+# CMMC 2.0: CM.L2-3.4.9 (Least Functionality)
+# NIST SP 800-53: CM-5 (Access Restrictions for Change)
+
+repos:
+# Main infrastructure repository
+- id: gitea.local/infrastructure/terraform-gcp
+  branch: /.*/
+  plan_requirements: [approved, mergeable]
+  apply_requirements: [approved, mergeable]
+  import_requirements: [approved, mergeable]
+  delete_source_branch_on_merge: false
+  allow_custom_workflows: true
+  allowed_overrides: [workflow, apply_requirements, delete_source_branch_on_merge]
+  allowed_workflows: [security-workflow, production-workflow]
+
+  # Pre-workflow hooks for security scanning
+  pre_workflow_hooks:
+    - run: |
+        echo "Starting pre-workflow security checks..."
+        # Check for secrets
+        trufflehog filesystem . --no-update --fail --json > /tmp/trufflehog.json || {
+          echo "ERROR: Secrets detected in repository"
+          cat /tmp/trufflehog.json
+          exit 1
+        }
+    - run: |
+        # Check branch protection
+        if [[ "$HEAD_BRANCH_NAME" == "main" ]] || [[ "$HEAD_BRANCH_NAME" == "master" ]]; then
+          echo "ERROR: Direct commits to protected branch not allowed"
+          exit 1
+        fi
+
+  # Post-workflow hooks for evidence collection
+  post_workflow_hooks:
+    - run: |
+        # Collect workflow evidence
+        echo "Workflow completed at $(date -Iseconds)" > /tmp/workflow-evidence.txt
+        echo "Repository: $BASE_REPO_NAME" >> /tmp/workflow-evidence.txt
+        echo "Pull Request: $PULL_NUM" >> /tmp/workflow-evidence.txt
+        echo "Branch: $HEAD_BRANCH_NAME" >> /tmp/workflow-evidence.txt
+        sha256sum /tmp/workflow-evidence.txt
+
+# Gitea platform infrastructure
+- id: gitea.local/gitea/infrastructure
+  branch: /.*/
+  plan_requirements: [approved, mergeable]
+  apply_requirements: [approved, mergeable]
+  import_requirements: [approved, mergeable]
+  delete_source_branch_on_merge: true
+  allow_custom_workflows: true
+  allowed_overrides: [workflow, apply_requirements]
+  allowed_workflows: [security-workflow, production-workflow]
+
+# Application deployment repositories
+- id: gitea.local/apps/*
+  branch: /.*/
+  plan_requirements: [approved]
+  apply_requirements: [approved, mergeable]
+  import_requirements: [approved, mergeable]
+  delete_source_branch_on_merge: false
+  allow_custom_workflows: false
+  allowed_overrides: [apply_requirements]
+  allowed_workflows: [security-workflow]
+
+# Security and compliance repository
+- id: gitea.local/security/compliance
+  branch: /.*/
+  plan_requirements: [approved, mergeable]
+  apply_requirements: [approved, mergeable, plan_success]
+  import_requirements: [approved, mergeable]
+  delete_source_branch_on_merge: false
+  allow_custom_workflows: true
+  allowed_overrides: []
+  allowed_workflows: [production-workflow]
+
+  # Extra security for compliance changes
+  pre_workflow_hooks:
+    - run: |
+        echo "Compliance repository change detected"
+        # Require additional approval for compliance changes
+        if [[ "$ATLANTIS_PULL_NUM" ]]; then
+          # Check for security team approval via Gitea API
+          echo "Checking for security team approval..."
+        fi
+
+# Network infrastructure (high sensitivity)
+- id: gitea.local/infrastructure/network
+  branch: /.*/
+  plan_requirements: [approved, mergeable, undiverged]
+  apply_requirements: [approved, mergeable, plan_success]
+  import_requirements: [approved, mergeable]
+  delete_source_branch_on_merge: false
+  allow_custom_workflows: false
+  allowed_overrides: []
+  allowed_workflows: [production-workflow]
+
+  pre_workflow_hooks:
+    - run: |
+        echo "Network infrastructure change - enhanced validation required"
+        # Validate network changes don't break segmentation
+        terraform validate -json | jq '.valid' | grep -q true || exit 1
+
+# IAM and identity management (critical)
+- id: gitea.local/infrastructure/iam
+  branch: /.*/
+  plan_requirements: [approved, mergeable, undiverged]
+  apply_requirements: [approved, mergeable, plan_success]
+  import_requirements: [approved, mergeable]
+  delete_source_branch_on_merge: false
+  allow_custom_workflows: false
+  allowed_overrides: []
+  allowed_workflows: [production-workflow]
+
+  pre_workflow_hooks:
+    - run: |
+        echo "IAM change detected - enforcing least privilege validation"
+        # Check for overly permissive roles
+        if grep -r "roles/owner" .; then
+          echo "ERROR: Owner role detected - use least privilege roles"
+          exit 1
+        fi
+        if grep -r "roles/editor" .; then
+          echo "WARNING: Editor role detected - consider more restrictive roles"
+        fi
+
+# Development and testing repositories
+- id: gitea.local/dev/*
+  branch: /.*/
+  plan_requirements: []
+  apply_requirements: [approved]
+  import_requirements: [approved]
+  delete_source_branch_on_merge: true
+  allow_custom_workflows: true
+  allowed_overrides: [workflow, apply_requirements, plan_requirements]
+  allowed_workflows: [security-workflow]
+
+# Global repository defaults
+- id: /.*/
+  branch: /.*/
+  plan_requirements: [approved, mergeable]
+  apply_requirements: [approved, mergeable]
+  delete_source_branch_on_merge: false
+  allow_custom_workflows: false
+  allowed_overrides: []
+  allowed_workflows: [security-workflow]
+
+  # Default security hooks
+  pre_workflow_hooks:
+    - run: |
+        echo "Repository: $BASE_REPO_NAME"
+        echo "Pull Request: $PULL_NUM"
+        echo "User: $USER_NAME"
+        echo "Timestamp: $(date -Iseconds)"

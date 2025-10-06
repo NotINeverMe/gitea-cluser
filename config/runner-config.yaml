@@ -1,0 +1,79 @@
+# Gitea Actions Runner Configuration
+# This configures the CI/CD runner for executing security scanning pipelines
+
+log:
+  level: info
+
+runner:
+  # Runner identification
+  name: docker-runner-1
+
+  # How often to fetch new jobs
+  fetch_timeout: 5s
+  fetch_interval: 2s
+
+  # Timeout for entire job execution
+  timeout: 3h
+
+  # Insecure mode (set to true for self-signed certs in dev)
+  insecure: false
+
+  # Number of concurrent jobs
+  capacity: 4
+
+  # Labels for job matching
+  labels:
+    - ubuntu-latest:docker://node:16-bullseye
+    - ubuntu-22.04:docker://node:16-bullseye
+    - ubuntu-20.04:docker://node:16-bullseye
+
+  # Environment variables passed to all jobs
+  env_file: .env.runner
+
+cache:
+  enabled: true
+  dir: /data/cache
+
+  # Cache size limits
+  max_size: 10GB
+
+  # Cache retention
+  retention_days: 7
+
+container:
+  # Network mode for job containers
+  network: bridge
+
+  # Enable Docker-in-Docker
+  privileged: false
+
+  # Docker options
+  options: --rm
+
+  # Valid platform identifiers
+  valid_volumes:
+    - /workspace
+    - /data
+
+  # Docker host
+  docker_host: unix:///var/run/docker.sock
+
+host:
+  # Workspace directory
+  workdir_parent: /data/workspace
+
+security:
+  # Restrict which images can be used
+  allowed_images:
+    - docker.io/*
+    - ghcr.io/*
+    - gcr.io/*
+    - quay.io/*
+
+  # Block privileged containers (except for specific use cases)
+  block_privileged: true
+
+  # Limit resource usage
+  resource_limits:
+    cpu: 4
+    memory: 8G

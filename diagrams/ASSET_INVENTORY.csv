@@ -1,0 +1,27 @@
+Asset_ID,Asset_Name,Asset_Type,CMMC_Category,Trust_Zone,IP_Address,Network,Encryption_at_Rest,Encryption_in_Transit,Authentication_Method,Primary_Data_Classification,NIST_800-171_Controls,CMMC_Practices,Notes
+A-1,End Users,Actor,OOS,Z-1: Internet,Dynamic,N/A,N/A,TLS 1.3,OAuth2 + MFA,OOS,"3.5.1, 3.5.2","IA.L2-3.5.1, IA.L2-3.5.2",External users accessing platform
+A-2,GCP Public APIs,External Service,External,Z-1: Internet,googleapis.com,N/A,N/A,TLS 1.3,Service Account OAuth2,External,"3.13.8, 3.1.20","SC.L2-3.13.8, AC.L2-3.1.20",Security Command Center and Cloud APIs
+A-3,External Registries,External Service,External,Z-1: Internet,registry-1.docker.io,N/A,N/A,TLS 1.3,Anonymous/Token,External,3.13.8,SC.L2-3.13.8,Docker Hub and GitHub Packages
+A-4,Reverse Proxy,Network Component,SPA,Z-2: DMZ,10.10.1.10,dmz-network,N/A,TLS 1.3,Session-based,SPA,"3.13.1, 3.13.5, 3.13.8","SC.L2-3.13.1, SC.L2-3.13.5",Caddy/Traefik with WAF capability
+A-5,VPN Gateway,Network Component,SPA,Z-2: DMZ,10.10.1.5,dmz-network,N/A,WireGuard Encryption,Certificate + MFA,SPA,"3.5.3, 3.13.8","IA.L2-3.5.3, SC.L2-3.13.8",WireGuard/Tailscale for admin access
+A-6,Gitea,Application,CUI,Z-3: Application Tier,10.10.2.10,app-tier,AES-256-GCM (via S-1),TLS 1.3,OAuth2 + SSH Keys,CUI,"3.1.1, 3.4.2, 3.13.11, 3.13.16","AC.L2-3.1.1, MP.L2-3.8.3, SC.L2-3.13.11",Self-hosted Git repository with secrets management
+A-7,n8n Workflow Engine,Application,SPA,Z-3: Application Tier,10.10.2.20,app-tier,AES-256-GCM (via S-3),TLS 1.3,API Key + HMAC,SPA,"3.4.1, 3.11.2, 3.13.8","CM.L2-3.4.1, SI.L2-3.14.1",Automation orchestration and evidence collection
+A-8,SonarQube,Application,SPA,Z-3: Application Tier,10.10.2.30,app-tier,AES-256-GCM (via S-2),TLS 1.3,Token Auth,CUI,"3.14.1, 3.14.2","SI.L2-3.14.1, SI.L2-3.14.2",SAST analysis platform
+A-9,Prometheus,Application,SPA,Z-3: Application Tier / Z-5: Monitoring,10.10.2.40 / 10.10.5.10,monitoring,AES-256-GCM (via S-4),HTTP (Internal),Service Discovery,SPA,"3.3.1, 3.3.2","AU.L2-3.3.1, AU.L2-3.3.2",Metrics collection and monitoring
+A-10,Grafana,Application,SPA,Z-3: Application Tier / Z-5: Monitoring,10.10.2.50 / 10.10.5.20,monitoring,N/A,TLS 1.3,OAuth2 + Basic Auth,SPA,3.3.5,AU.L2-3.3.5,Visualization and alerting dashboard
+A-11,Trivy Scanner,Security Tool,SPC,Z-5: Security Scanning,Dynamic,scan-tier,N/A,TLS 1.3 (DB Pull),None (Ephemeral),SPC,"3.14.1, 3.14.2, 3.11.2","SI.L2-3.14.1, RA.L2-3.11.2",Container image CVE scanner
+A-12,Grype Scanner,Security Tool,SPC,Z-5: Security Scanning,Dynamic,scan-tier,N/A,TLS 1.3 (DB Pull),None (Ephemeral),SPC,"3.14.1, 3.14.2, 3.11.2","SI.L2-3.14.1, RA.L2-3.11.2",SBOM and vulnerability analysis
+A-13,Semgrep,Security Tool,SPC,Z-5: Security Scanning,Dynamic,scan-tier,N/A,N/A,None (Ephemeral),SPC,"3.14.1, 3.14.2","SI.L2-3.14.1, SI.L2-3.14.2",SAST rules engine
+A-14,Checkov,Security Tool,SPC,Z-5: Security Scanning,Dynamic,scan-tier,N/A,N/A,None (Ephemeral),SPC,"3.4.2, 3.14.1","CM.L2-3.4.2, SI.L2-3.14.1",IaC security scanning
+A-15,tfsec,Security Tool,SPC,Z-5: Security Scanning,Dynamic,scan-tier,N/A,N/A,None (Ephemeral),SPC,"3.4.2, 3.14.1","CM.L2-3.4.2, SI.L2-3.14.1",Terraform security scanner
+A-16,Terrascan,Security Tool,SPC,Z-5: Security Scanning,Dynamic,scan-tier,N/A,N/A,None (Ephemeral),SPC,"3.4.2, 3.11.3","CM.L2-3.4.2, RA.L2-3.11.3",IaC compliance scanner
+A-17,Infracost,Security Tool,SPC,Z-5: Security Scanning,Dynamic,scan-tier,N/A,TLS 1.3 (API),API Key,SPC,3.4.1,CM.L2-3.4.1,Cloud cost analysis
+A-18,Security Command Center,External Service,External,Z-6: GCP Cloud,N/A,GCP,CMEK AES-256-GCM,TLS 1.3,Service Account OAuth2,External,"3.11.2, 3.14.1","RA.L2-3.11.2, SI.L2-3.14.1",GCP vulnerability aggregation
+A-19,Cloud Asset Inventory,External Service,External,Z-6: GCP Cloud,N/A,GCP,CMEK AES-256-GCM,TLS 1.3,Service Account OAuth2,External,3.4.1,CM.L2-3.4.1,GCP infrastructure discovery
+A-20,Cloud Logging,External Service,External,Z-6: GCP Cloud,N/A,GCP,CMEK AES-256-GCM,TLS 1.3,Service Account OAuth2,External,"3.3.1, 3.3.8","AU.L2-3.3.1, AU.L2-3.3.8",Centralized audit logging
+A-21,Google Chat,External Service,External,Z-6: GCP Cloud,N/A,GCP,TLS 1.3,TLS 1.3,Webhook Secret,External,N/A,N/A,Notification webhooks
+S-1,Gitea PostgreSQL,Database,CUI,Z-4: Data Tier,10.10.3.10,data-tier,AES-256-GCM (LUKS),TLS + Certificate,Password + Certificate,CUI,"3.13.11, 3.13.16","SC.L2-3.13.11, SC.L2-3.13.16",Encrypted database for source code metadata
+S-2,SonarQube PostgreSQL,Database,SPA,Z-4: Data Tier,10.10.3.20,data-tier,AES-256-GCM (LUKS),TLS + Certificate,Password + Certificate,CUI,"3.13.11, 3.13.16","SC.L2-3.13.11, SC.L2-3.13.16",SAST results and code quality data
+S-3,n8n PostgreSQL,Database,SPA,Z-4: Data Tier,10.10.3.30,data-tier,AES-256-GCM (LUKS),TLS + Certificate,Password + Certificate,SPA,"3.13.11, 3.13.16","SC.L2-3.13.11, SC.L2-3.13.16",Workflow state and execution logs
+S-4,Prometheus TSDB,Database,SPA,Z-4: Data Tier,10.10.3.40,data-tier,AES-256-GCM (LUKS),Unix Socket,Process Isolation,SPA,3.13.16,SC.L2-3.13.16,Time-series metrics database
+S-5,GCS Evidence Bucket,Cloud Storage,CRMA,Z-6: GCP Cloud,N/A,GCP,CMEK AES-256-GCM,TLS 1.3,Service Account OAuth2,CUI,"3.3.9, 3.8.1, 3.13.11, 3.13.16","AU.L2-3.3.9, MP.L2-3.8.1, SC.L2-3.13.11",Immutable evidence storage with 7-year retention

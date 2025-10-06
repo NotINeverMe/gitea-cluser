@@ -1,0 +1,38 @@
+# SonarQube Exporter Dockerfile
+# CMMC 2.0: CA.L2-3.12.3 - Security Assessment
+
+FROM python:3.11-slim
+
+# Install dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r exporter && useradd -r -g exporter exporter
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy exporter script
+COPY sonarqube-exporter.py .
+RUN chmod +x sonarqube-exporter.py
+
+# Switch to non-root user
+USER exporter
+
+# Expose metrics port
+EXPOSE 9200
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:9200/metrics || exit 1
+
+# Run exporter
+CMD ["python", "-u", "sonarqube-exporter.py"]

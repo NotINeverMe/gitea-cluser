@@ -1,0 +1,78 @@
+# Grafana Datasource Provisioning
+# CMMC 2.0: SI.L2-3.14.4 - System Monitoring
+# NIST SP 800-171: 3.14.4 - System and Information Integrity
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: "15s"
+      queryTimeout: "60s"
+      httpMethod: "POST"
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+      alertmanagerUid: alertmanager
+      manageAlerts: true
+      prometheusType: Prometheus
+      prometheusVersion: 2.47.0
+      cacheLevel: 'High'
+      incrementalQuerying: true
+      incrementalQueryOverlapWindow: 10m
+      disableRecordingRules: false
+
+  - name: AlertManager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    uid: alertmanager
+    editable: false
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: true
+
+  - name: PostgreSQL
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: grafana
+    user: grafana
+    editable: false
+    jsonData:
+      sslmode: 'require'
+      postgresVersion: 15
+      timescaledb: false
+    secureJsonData:
+      password: '${GRAFANA_DB_PASSWORD}'
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      timeout: 60
+      maxLines: 1000
+      derivedFields:
+        - datasourceUid: tempo
+          matcherRegex: "traceID=(\\w+)"
+          name: TraceID
+          url: "$${__value.raw}"
+
+  - name: CloudWatch
+    type: cloudwatch
+    access: proxy
+    editable: false
+    jsonData:
+      authType: keys
+      defaultRegion: us-east-1
+      customMetricsNamespaces: "CWAgent,DevSecOps"
+    secureJsonData:
+      accessKey: '${AWS_ACCESS_KEY_ID}'
+      secretKey: '${AWS_SECRET_ACCESS_KEY}'

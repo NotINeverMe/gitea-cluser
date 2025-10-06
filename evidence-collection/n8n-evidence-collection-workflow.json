@@ -1,0 +1,298 @@
+{
+  "name": "GCP Evidence Collection Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Daily Schedule - 2 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "command": "cd /home/notme/Desktop/gitea/evidence-collection && python3 gcp-scc-collector.py --config config/evidence-config.yaml"
+      },
+      "name": "Collect SCC Findings",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "command": "cd /home/notme/Desktop/gitea/evidence-collection && python3 gcp-asset-inventory.py --config config/evidence-config.yaml"
+      },
+      "name": "Collect Asset Inventory",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "command": "cd /home/notme/Desktop/gitea/evidence-collection && python3 gcp-iam-evidence.py --config config/evidence-config.yaml"
+      },
+      "name": "Collect IAM Evidence",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [450, 400]
+    },
+    {
+      "parameters": {
+        "command": "cd /home/notme/Desktop/gitea/evidence-collection && python3 gcp-encryption-audit.py --config config/evidence-config.yaml"
+      },
+      "name": "Run Encryption Audit",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [450, 500]
+    },
+    {
+      "parameters": {
+        "command": "cd /home/notme/Desktop/gitea/evidence-collection && bash gcp-logging-export.sh"
+      },
+      "name": "Configure Logging Export",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [450, 600]
+    },
+    {
+      "parameters": {
+        "command": "cd /home/notme/Desktop/gitea/evidence-collection && python3 manifest-generator.py --evidence-dir output/"
+      },
+      "name": "Generate Manifest",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [650, 400]
+    },
+    {
+      "parameters": {
+        "command": "cd /home/notme/Desktop/gitea/evidence-collection && python3 validate-evidence.py --directory output/ --output validation-report.json"
+      },
+      "name": "Validate Evidence",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [850, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.code}}",
+              "operation": "notEqual",
+              "value2": "0"
+            }
+          ]
+        }
+      },
+      "name": "Check for Errors",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1050, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://chat.googleapis.com/v1/spaces/SPACE/messages?key=KEY&token=TOKEN",
+        "options": {},
+        "bodyParametersJson": "={\n  \"text\": \"🚨 Evidence Collection Failed\\n\\nError: {{$json.stderr}}\\n\\nCollector: {{$node[\"Validate Evidence\"].name}}\\n\\nTimestamp: {{$now}}\"\n}"
+      },
+      "name": "Send Error Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://chat.googleapis.com/v1/spaces/SPACE/messages?key=KEY&token=TOKEN",
+        "options": {},
+        "bodyParametersJson": "={\n  \"text\": \"✅ Evidence Collection Complete\\n\\nTotal Files: {{$json.total_files}}\\nValid Files: {{$json.valid_files}}\\n\\nTimestamp: {{$now}}\"\n}"
+      },
+      "name": "Send Success Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1250, 500]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "resource": "file",
+        "operation": "upload",
+        "bucketName": "evidence-collection-bucket",
+        "fileName": "manifests/manifest_{{$now.format(\"YYYY-MM-DD_HHmmss\")}}.json",
+        "binaryData": false,
+        "fileContent": "={{$json.output}}"
+      },
+      "name": "Upload to GCS",
+      "type": "n8n-nodes-base.googleCloudStorage",
+      "typeVersion": 1,
+      "position": [1050, 600],
+      "credentials": {
+        "googleCloudStorageOAuth2Api": {
+          "id": "1",
+          "name": "GCS Evidence Upload"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily Schedule - 2 AM": {
+      "main": [
+        [
+          {
+            "node": "Collect SCC Findings",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Collect Asset Inventory",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Collect IAM Evidence",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Run Encryption Audit",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Configure Logging Export",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect SCC Findings": {
+      "main": [
+        [
+          {
+            "node": "Generate Manifest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Asset Inventory": {
+      "main": [
+        [
+          {
+            "node": "Generate Manifest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect IAM Evidence": {
+      "main": [
+        [
+          {
+            "node": "Generate Manifest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Encryption Audit": {
+      "main": [
+        [
+          {
+            "node": "Generate Manifest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configure Logging Export": {
+      "main": [
+        [
+          {
+            "node": "Generate Manifest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Manifest": {
+      "main": [
+        [
+          {
+            "node": "Validate Evidence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Evidence": {
+      "main": [
+        [
+          {
+            "node": "Check for Errors",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Upload to GCS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Errors": {
+      "main": [
+        [
+          {
+            "node": "Send Error Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Success Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "compliance",
+      "id": "1"
+    },
+    {
+      "name": "evidence",
+      "id": "2"
+    },
+    {
+      "name": "gcp",
+      "id": "3"
+    }
+  ],
+  "meta": {
+    "instanceId": "gitea-devsecops"
+  }
+}

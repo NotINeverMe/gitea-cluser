@@ -1,0 +1,35 @@
+# GCP Evidence Collection Framework Dependencies
+
+# Google Cloud Libraries
+google-cloud-securitycenter>=1.23.0
+google-cloud-asset>=3.19.0
+google-cloud-iam>=2.12.0
+google-cloud-resource-manager>=1.10.0
+google-cloud-kms>=2.19.0
+google-cloud-compute>=1.14.0
+google-cloud-logging>=3.5.0
+google-cloud-storage>=2.10.0
+google-api-python-client>=2.95.0
+
+# Core Dependencies
+google-auth>=2.22.0
+google-auth-httplib2>=0.1.0
+google-auth-oauthlib>=1.0.0
+
+# Data Processing
+PyYAML>=6.0.1
+jsonschema>=4.19.0
+
+# Utilities
+python-dateutil>=2.8.2
+requests>=2.31.0
+
+# Prometheus Metrics
+prometheus-client>=0.17.1
+
+# Development/Testing (optional)
+pytest>=7.4.0
+pytest-cov>=4.1.0
+black>=23.7.0
+flake8>=6.1.0
+mypy>=1.5.0

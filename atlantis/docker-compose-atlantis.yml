@@ -1,0 +1,207 @@
+# Atlantis Docker Compose Stack for Gitea GitOps
+# CMMC 2.0: CM.L2-3.4.2 (Configuration Change Control)
+# NIST SP 800-171: 3.4.2 (Baseline Configuration)
+
+version: '3.8'
+
+services:
+  atlantis:
+    image: ghcr.io/runatlantis/atlantis:v0.27.0
+    container_name: atlantis
+    restart: unless-stopped
+    environment:
+      # Server Configuration
+      ATLANTIS_HOST: ${ATLANTIS_HOST:-atlantis.gitea.local}
+      ATLANTIS_PORT: 4141
+      ATLANTIS_DATA_DIR: /atlantis-data
+      ATLANTIS_LOG_LEVEL: ${ATLANTIS_LOG_LEVEL:-info}
+
+      # Gitea Integration
+      ATLANTIS_GH_USER: ${ATLANTIS_GITEA_USER}
+      ATLANTIS_GH_TOKEN: ${ATLANTIS_GITEA_TOKEN}
+      ATLANTIS_GH_WEBHOOK_SECRET: ${ATLANTIS_WEBHOOK_SECRET}
+      ATLANTIS_GITEA_BASE_URL: ${GITEA_BASE_URL:-https://gitea.local}
+      ATLANTIS_GITEA_PAGE_SIZE: 50
+
+      # Repository Configuration
+      ATLANTIS_REPO_ALLOWLIST: ${ATLANTIS_REPO_ALLOWLIST:-gitea.local/*}
+      ATLANTIS_REPO_CONFIG_JSON: '/etc/atlantis/repos.yaml'
+      ATLANTIS_ATLANTIS_URL: ${ATLANTIS_URL:-https://atlantis.gitea.local}
+
+      # Security Settings
+      ATLANTIS_SSL_CERT_FILE: /etc/atlantis/tls/cert.pem
+      ATLANTIS_SSL_KEY_FILE: /etc/atlantis/tls/key.pem
+      ATLANTIS_REQUIRE_APPROVAL: ${ATLANTIS_REQUIRE_APPROVAL:-true}
+      ATLANTIS_REQUIRE_MERGEABLE: ${ATLANTIS_REQUIRE_MERGEABLE:-true}
+      ATLANTIS_ENABLE_POLICY_CHECKS: ${ATLANTIS_ENABLE_POLICY_CHECKS:-true}
+
+      # Terraform/Terragrunt Settings
+      ATLANTIS_DEFAULT_TF_VERSION: ${TF_VERSION:-1.6.0}
+      ATLANTIS_TF_DOWNLOAD_URL: https://releases.hashicorp.com/terraform
+      ATLANTIS_PARALLEL_POOL_SIZE: ${ATLANTIS_PARALLEL_POOL_SIZE:-4}
+
+      # GCP Configuration
+      GOOGLE_APPLICATION_CREDENTIALS: /etc/atlantis/gcp/service-account.json
+      GOOGLE_PROJECT: ${GCP_PROJECT_ID}
+      GOOGLE_REGION: ${GCP_REGION:-us-central1}
+
+      # Policy Enforcement
+      ATLANTIS_POLICY_CHECK_CMD: /usr/local/bin/conftest verify --policy /etc/atlantis/policies
+      ATLANTIS_ENABLE_DIFF_MARKDOWN_FORMAT: true
+
+      # Evidence Collection
+      ATLANTIS_WRITE_GIT_CREDS: ${ATLANTIS_WRITE_GIT_CREDS:-false}
+      ATLANTIS_HIDE_UNCHANGED_PLAN_COMMENTS: ${ATLANTIS_HIDE_UNCHANGED_PLAN_COMMENTS:-false}
+
+    volumes:
+      - atlantis-data:/atlantis-data
+      - ./atlantis.yaml:/etc/atlantis/atlantis.yaml:ro
+      - ./repos.yaml:/etc/atlantis/repos.yaml:ro
+      - ./policies:/etc/atlantis/policies:ro
+      - ./tls:/etc/atlantis/tls:ro
+      - ./gcp-sa.json:/etc/atlantis/gcp/service-account.json:ro
+      - terragrunt-cache:/root/.terragrunt-cache
+      - terraform-plugins:/root/.terraform.d
+
+    ports:
+      - "4141:4141"
+
+    networks:
+      - gitea-net
+      - monitoring
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.atlantis.rule=Host(`atlantis.gitea.local`)"
+      - "traefik.http.routers.atlantis.tls=true"
+      - "traefik.http.services.atlantis.loadbalancer.server.port=4141"
+      - "prometheus.io/scrape=true"
+      - "prometheus.io/port=4141"
+      - "prometheus.io/path=/metrics"
+
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4141/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+        labels: "service=atlantis,compliance=cmmc-cm.l2-3.4.2"
+
+  # Caddy Reverse Proxy for TLS
+  caddy:
+    image: caddy:2.7-alpine
+    container_name: atlantis-caddy
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+      - ./tls:/etc/caddy/tls:ro
+    networks:
+      - gitea-net
+    labels:
+      - "prometheus.io/scrape=true"
+      - "prometheus.io/port=2019"
+      - "prometheus.io/path=/metrics"
+
+  # Redis for caching and locking
+  redis:
+    image: redis:7-alpine
+    container_name: atlantis-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    networks:
+      - gitea-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # PostgreSQL for Atlantis DB backend (optional)
+  postgres:
+    image: postgres:15-alpine
+    container_name: atlantis-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: atlantis
+      POSTGRES_USER: atlantis
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - gitea-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlantis -d atlantis"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Conftest for Policy Validation
+  conftest:
+    image: openpolicyagent/conftest:v0.46.0
+    container_name: atlantis-conftest
+    restart: unless-stopped
+    volumes:
+      - ./policies:/policies:ro
+    networks:
+      - gitea-net
+    command: ["server", "--policy", "/policies"]
+
+  # Infracost for cost estimation
+  infracost:
+    image: infracost/infracost:latest
+    container_name: atlantis-infracost
+    restart: unless-stopped
+    environment:
+      INFRACOST_API_KEY: ${INFRACOST_API_KEY}
+    volumes:
+      - infracost-cache:/root/.infracost
+    networks:
+      - gitea-net
+
+volumes:
+  atlantis-data:
+    driver: local
+  terragrunt-cache:
+    driver: local
+  terraform-plugins:
+    driver: local
+  caddy-data:
+    driver: local
+  caddy-config:
+    driver: local
+  redis-data:
+    driver: local
+  postgres-data:
+    driver: local
+  infracost-cache:
+    driver: local
+
+networks:
+  gitea-net:
+    external: true
+  monitoring:
+    external: true

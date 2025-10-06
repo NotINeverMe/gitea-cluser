@@ -1,0 +1,120 @@
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#e8f5e9','secondaryColor':'#fff3e0','tertiaryColor':'#fce4ec','primaryBorderColor':'#4caf50','secondaryBorderColor':'#ff9800','tertiaryBorderColor':'#e91e63'}}}%%
+
+graph TB
+    subgraph Z1["Z-1: INTERNET ZONE (Untrusted)"]
+        style Z1 fill:#ffebee,stroke:#d32f2f,stroke-width:3px,stroke-dasharray: 5 5
+        A1["A-1: End Users<br/>[OOS]<br/>Browsers/Git Clients"]
+        A2["A-2: GCP Public APIs<br/>[External]<br/>Security Command Center<br/>Cloud Asset Inventory<br/>Cloud Logging"]
+        A3["A-3: External Registries<br/>[External]<br/>Docker Hub<br/>GitHub Packages"]
+    end
+
+    subgraph Z2["Z-2: DMZ / EDGE ZONE (Controlled)"]
+        style Z2 fill:#fff3e0,stroke:#f57c00,stroke-width:3px
+        A4["A-4: Reverse Proxy<br/>[SPA]<br/>Caddy/Traefik<br/>TLS 1.3 Termination<br/>WAF Capability<br/>IP: 10.10.1.10"]
+        A5["A-5: VPN Gateway<br/>[SPA]<br/>WireGuard/Tailscale<br/>Admin Access Only<br/>IP: 10.10.1.5"]
+    end
+
+    subgraph Z3["Z-3: APPLICATION TIER (CUI Processing)"]
+        style Z3 fill:#e3f2fd,stroke:#1976d2,stroke-width:4px
+        A6["A-6: Gitea<br/>[CUI]<br/>Source Code Repository<br/>Secrets Management<br/>Network: app-tier<br/>IP: 10.10.2.10"]
+        A7["A-7: n8n Workflow Engine<br/>[SPA]<br/>Automation Orchestration<br/>Evidence Collection<br/>Network: app-tier<br/>IP: 10.10.2.20"]
+        A8["A-8: SonarQube<br/>[SPA]<br/>SAST Analysis<br/>Code Quality Metrics<br/>Network: app-tier<br/>IP: 10.10.2.30"]
+        A9["A-9: Prometheus<br/>[SPA]<br/>Metrics Collection<br/>Security Monitoring<br/>Network: monitoring<br/>IP: 10.10.2.40"]
+        A10["A-10: Grafana<br/>[SPA]<br/>Visualization Dashboard<br/>Alerting<br/>Network: monitoring<br/>IP: 10.10.2.50"]
+    end
+
+    subgraph Z4["Z-4: DATA TIER (CUI Storage)"]
+        style Z4 fill:#e8f5e9,stroke:#388e3c,stroke-width:4px
+        S1["S-1: Gitea PostgreSQL<br/>[CUI]<br/>Encrypted at Rest<br/>AES-256-GCM<br/>Network: data-tier<br/>IP: 10.10.3.10"]
+        S2["S-2: SonarQube PostgreSQL<br/>[SPA]<br/>Encrypted at Rest<br/>AES-256-GCM<br/>Network: data-tier<br/>IP: 10.10.3.20"]
+        S3["S-3: n8n PostgreSQL<br/>[SPA]<br/>Workflow State Store<br/>AES-256-GCM<br/>Network: data-tier<br/>IP: 10.10.3.30"]
+        S4["S-4: Prometheus TSDB<br/>[SPA]<br/>Time Series Data<br/>Local Volume<br/>Network: data-tier<br/>IP: 10.10.3.40"]
+    end
+
+    subgraph Z5["Z-5: SECURITY SCANNING ZONE (Isolated)"]
+        style Z5 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:3px
+        A11["A-11: Trivy Scanner<br/>[SPC]<br/>Container Image CVE<br/>Ephemeral Pods<br/>Network: scan-tier"]
+        A12["A-12: Grype Scanner<br/>[SPC]<br/>SBOM Analysis<br/>Ephemeral Pods<br/>Network: scan-tier"]
+        A13["A-13: Semgrep<br/>[SPC]<br/>SAST Rules Engine<br/>Ephemeral Pods<br/>Network: scan-tier"]
+        A14["A-14: Checkov<br/>[SPC]<br/>IaC Security Scan<br/>Ephemeral Pods<br/>Network: scan-tier"]
+        A15["A-15: tfsec<br/>[SPC]<br/>Terraform Security<br/>Ephemeral Pods<br/>Network: scan-tier"]
+        A16["A-16: Terrascan<br/>[SPC]<br/>IaC Compliance<br/>Ephemeral Pods<br/>Network: scan-tier"]
+        A17["A-17: Infracost<br/>[SPC]<br/>Cost Analysis<br/>Ephemeral Pods<br/>Network: scan-tier"]
+    end
+
+    subgraph Z6["Z-6: GCP CLOUD ZONE (External Trust Boundary)"]
+        style Z6 fill:#fff9c4,stroke:#f9a825,stroke-width:3px,stroke-dasharray: 5 5
+        S5["S-5: GCS Evidence Bucket<br/>[CRMA]<br/>Immutable Storage<br/>7-Year Retention<br/>CMEK Encryption<br/>AES-256-GCM"]
+        A18["A-18: Security Command Center<br/>[External]<br/>Vulnerability Aggregation<br/>Compliance Monitoring"]
+        A19["A-19: Cloud Asset Inventory<br/>[External]<br/>Infrastructure Discovery"]
+        A20["A-20: Cloud Logging<br/>[External]<br/>Centralized Audit Logs"]
+        A21["A-21: Google Chat API<br/>[External]<br/>Notification Webhooks"]
+    end
+
+    %% Trust Boundary Crossings - Internet to DMZ
+    A1 -->|F-1: HTTPS/443<br/>TLS 1.3<br/>OAuth2| A4
+    A1 -->|F-2: SSH/22<br/>Git over SSH<br/>Public Key Auth| A4
+    A3 -->|F-3: HTTPS/443<br/>TLS 1.3<br/>Registry Pull| A4
+
+    %% Admin Access
+    A1 -->|F-4: WireGuard/51820<br/>Encrypted Tunnel<br/>MFA Required| A5
+
+    %% DMZ to Application Tier
+    A4 -->|F-5: HTTP/3000<br/>Internal Network<br/>Session Auth| A6
+    A4 -->|F-6: HTTP/5678<br/>Internal Network<br/>API Key Auth| A7
+    A4 -->|F-7: HTTP/9000<br/>Internal Network<br/>Token Auth| A8
+    A4 -->|F-8: HTTP/3001<br/>Internal Network<br/>Basic Auth| A10
+    A5 -->|F-9: SSH/Admin<br/>Encrypted<br/>Certificate Auth| A6
+    A5 -->|F-10: SSH/Admin<br/>Encrypted<br/>Certificate Auth| A7
+
+    %% Application to Data Tier
+    A6 -->|F-11: PostgreSQL/5432<br/>TLS Required<br/>Password + Cert| S1
+    A8 -->|F-12: PostgreSQL/5432<br/>TLS Required<br/>Password + Cert| S2
+    A7 -->|F-13: PostgreSQL/5432<br/>TLS Required<br/>Password + Cert| S3
+    A9 -->|F-14: Write TSDB<br/>Local Socket<br/>Process Isolation| S4
+
+    %% Application Tier Interactions
+    A6 -->|F-15: Webhook/HTTP<br/>HMAC Signature<br/>Event Triggers| A7
+    A7 -->|F-16: HTTP/9000<br/>API Token<br/>Scan Triggers| A8
+    A9 -->|F-17: HTTP/Scrape<br/>Metrics Pull<br/>Service Discovery| A6
+    A9 -->|F-18: HTTP/Scrape<br/>Metrics Pull<br/>Service Discovery| A7
+    A9 -->|F-19: HTTP/Scrape<br/>Metrics Pull<br/>Service Discovery| A8
+    A10 -->|F-20: HTTP/9090<br/>PromQL Query<br/>Token Auth| A9
+
+    %% Application to Security Scanning
+    A6 -->|F-21: Docker Socket<br/>Unix Domain<br/>Container Spawn| A11
+    A6 -->|F-22: Docker Socket<br/>Unix Domain<br/>Container Spawn| A12
+    A6 -->|F-23: Docker Socket<br/>Unix Domain<br/>Container Spawn| A13
+    A7 -->|F-24: Docker Exec<br/>Volume Mount<br/>IaC File Access| A14
+    A7 -->|F-25: Docker Exec<br/>Volume Mount<br/>IaC File Access| A15
+    A7 -->|F-26: Docker Exec<br/>Volume Mount<br/>IaC File Access| A16
+    A7 -->|F-27: Docker Exec<br/>Volume Mount<br/>Cost Analysis| A17
+
+    %% Security Scanning to Internet (CVE DB Updates)
+    A11 -->|F-28: HTTPS/443<br/>TLS 1.3<br/>Trivy DB Pull| A2
+    A12 -->|F-29: HTTPS/443<br/>TLS 1.3<br/>Grype DB Pull| A2
+
+    %% Application to GCP Cloud
+    A7 -->|F-30: HTTPS/443<br/>TLS 1.3<br/>Service Account OAuth2| S5
+    A7 -->|F-31: HTTPS/443<br/>TLS 1.3<br/>Service Account OAuth2| A18
+    A7 -->|F-32: HTTPS/443<br/>TLS 1.3<br/>Service Account OAuth2| A19
+    A7 -->|F-33: HTTPS/443<br/>TLS 1.3<br/>Service Account OAuth2| A20
+    A7 -->|F-34: HTTPS/443<br/>TLS 1.3<br/>Webhook Secret| A21
+
+    %% GCP to Application (Finding Ingestion)
+    A18 -->|F-35: Pub/Sub Push<br/>HTTPS/443<br/>TLS 1.3<br/>JWT Auth| A7
+
+    %% Legend Annotations
+    classDef cui fill:#e3f2fd,stroke:#1976d2,stroke-width:3px
+    classDef spa fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef crma fill:#e8f5e9,stroke:#388e3c,stroke-width:3px
+    classDef spc fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef oos fill:#fafafa,stroke:#757575,stroke-width:1px
+    classDef ext fill:#fff9c4,stroke:#f9a825,stroke-width:2px,stroke-dasharray: 5 5
+
+    class A6,S1 cui
+    class A4,A5,A7,A8,A9,A10,S2,S3,S4 spa
+    class S5 crma
+    class A11,A12,A13,A14,A15,A16,A17 spc
+    class A1 oos
+    class A2,A3,A18,A19,A20,A21 ext

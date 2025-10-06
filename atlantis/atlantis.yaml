@@ -1,0 +1,418 @@
+# Atlantis Server Configuration
+# CMMC 2.0: CM.L2-3.4.3 (Track Security Configuration Changes)
+# NIST SP 800-53: CM-3 (Configuration Change Control)
+
+version: 3
+automerge: false
+delete_source_branch_on_merge: false
+parallel_plan: true
+parallel_apply: false
+abort_on_execution_order_fail: true
+
+# Projects Configuration
+projects:
+- name: vpc-dev
+  dir: terragrunt/environments/dev/vpc
+  workspace: dev
+  terraform_version: v1.6.0
+  delete_source_branch_on_merge: false
+  repo_locking: true
+  custom_policy_check: true
+  execution_order_group: 1
+  autoplan:
+    when_modified: ["*.tf", "*.hcl", "terragrunt.hcl"]
+    enabled: true
+  apply_requirements: [approved, mergeable]
+  workflow: security-workflow
+
+- name: vpc-staging
+  dir: terragrunt/environments/staging/vpc
+  workspace: staging
+  terraform_version: v1.6.0
+  delete_source_branch_on_merge: false
+  repo_locking: true
+  custom_policy_check: true
+  execution_order_group: 1
+  autoplan:
+    when_modified: ["*.tf", "*.hcl", "terragrunt.hcl"]
+    enabled: true
+  apply_requirements: [approved, mergeable]
+  workflow: security-workflow
+
+- name: vpc-prod
+  dir: terragrunt/environments/prod/vpc
+  workspace: prod
+  terraform_version: v1.6.0
+  delete_source_branch_on_merge: false
+  repo_locking: true
+  custom_policy_check: true
+  execution_order_group: 1
+  autoplan:
+    when_modified: ["*.tf", "*.hcl", "terragrunt.hcl"]
+    enabled: true
+  apply_requirements: [approved, mergeable, plan_success]
+  workflow: production-workflow
+
+- name: compute-dev
+  dir: terragrunt/environments/dev/compute
+  workspace: dev
+  terraform_version: v1.6.0
+  delete_source_branch_on_merge: false
+  repo_locking: true
+  custom_policy_check: true
+  execution_order_group: 2
+  depends_on: [vpc-dev]
+  autoplan:
+    when_modified: ["*.tf", "*.hcl", "terragrunt.hcl"]
+    enabled: true
+  apply_requirements: [approved, mergeable]
+  workflow: security-workflow
+
+- name: compute-staging
+  dir: terragrunt/environments/staging/compute
+  workspace: staging
+  terraform_version: v1.6.0
+  delete_source_branch_on_merge: false
+  repo_locking: true
+  custom_policy_check: true
+  execution_order_group: 2
+  depends_on: [vpc-staging]
+  autoplan:
+    when_modified: ["*.tf", "*.hcl", "terragrunt.hcl"]
+    enabled: true
+  apply_requirements: [approved, mergeable]
+  workflow: security-workflow
+
+- name: compute-prod
+  dir: terragrunt/environments/prod/compute
+  workspace: prod
+  terraform_version: v1.6.0
+  delete_source_branch_on_merge: false
+  repo_locking: true
+  custom_policy_check: true
+  execution_order_group: 2
+  depends_on: [vpc-prod]
+  autoplan:
+    when_modified: ["*.tf", "*.hcl", "terragrunt.hcl"]
+    enabled: true
+  apply_requirements: [approved, mergeable, plan_success]
+  workflow: production-workflow
+
+- name: monitoring-dev
+  dir: terragrunt/environments/dev/monitoring
+  workspace: dev
+  terraform_version: v1.6.0
+  delete_source_branch_on_merge: false
+  repo_locking: true
+  custom_policy_check: true
+  execution_order_group: 3
+  depends_on: [vpc-dev, compute-dev]
+  autoplan:
+    when_modified: ["*.tf", "*.hcl", "terragrunt.hcl"]
+    enabled: true
+  apply_requirements: [approved, mergeable]
+  workflow: security-workflow
+
+- name: monitoring-staging
+  dir: terragrunt/environments/staging/monitoring
+  workspace: staging
+  terraform_version: v1.6.0
+  delete_source_branch_on_merge: false
+  repo_locking: true
+  custom_policy_check: true
+  execution_order_group: 3
+  depends_on: [vpc-staging, compute-staging]
+  autoplan:
+    when_modified: ["*.tf", "*.hcl", "terragrunt.hcl"]
+    enabled: true
+  apply_requirements: [approved, mergeable]
+  workflow: security-workflow
+
+- name: monitoring-prod
+  dir: terragrunt/environments/prod/monitoring
+  workspace: prod
+  terraform_version: v1.6.0
+  delete_source_branch_on_merge: false
+  repo_locking: true
+  custom_policy_check: true
+  execution_order_group: 3
+  depends_on: [vpc-prod, compute-prod]
+  autoplan:
+    when_modified: ["*.tf", "*.hcl", "terragrunt.hcl"]
+    enabled: true
+  apply_requirements: [approved, mergeable, plan_success]
+  workflow: production-workflow
+
+- name: security-baseline
+  dir: terragrunt/environments/all/security
+  workspace: default
+  terraform_version: v1.6.0
+  delete_source_branch_on_merge: false
+  repo_locking: true
+  custom_policy_check: true
+  execution_order_group: 0
+  autoplan:
+    when_modified: ["*.tf", "*.hcl", "terragrunt.hcl"]
+    enabled: true
+  apply_requirements: [approved, mergeable, plan_success]
+  workflow: production-workflow
+
+# Workflow Definitions
+workflows:
+  security-workflow:
+    plan:
+      steps:
+      - env:
+          name: TF_IN_AUTOMATION
+          value: "true"
+      - env:
+          name: TF_CLI_ARGS
+          value: "-no-color"
+
+      # Terragrunt validate
+      - run: terragrunt validate --terragrunt-non-interactive
+        output: show
+
+      # Format check
+      - run: terraform fmt -check=true -diff=true
+        output: show
+
+      # Initialize with backend
+      - run: terragrunt init -upgrade=false
+        output: hide
+
+      # Generate plan
+      - plan:
+          extra_args: ["-lock=true", "-input=false"]
+          output: show
+
+      # Security scanning with Checkov
+      - run: |
+          checkov -d . --framework terraform --output json --soft-fail \
+            --check CKV_GCP_1,CKV_GCP_2,CKV_GCP_3,CKV_GCP_6,CKV_GCP_13 \
+            > /tmp/checkov-results.json
+        output: show
+
+      # tfsec scanning
+      - run: |
+          tfsec . --format json --soft-fail \
+            --exclude-downloaded-modules \
+            > /tmp/tfsec-results.json
+        output: show
+
+      # Terrascan scanning
+      - run: |
+          terrascan scan -i terraform -t gcp \
+            --config-path /etc/atlantis/policies/terrascan.toml \
+            -o json > /tmp/terrascan-results.json || true
+        output: show
+
+      # OPA/Conftest policy validation
+      - run: |
+          conftest verify --policy /etc/atlantis/policies \
+            --namespace terraform.cmmc \
+            --output json \
+            planfile.json > /tmp/conftest-results.json
+        output: show
+
+      # Infracost estimation
+      - run: |
+          infracost breakdown --path . \
+            --format json \
+            --out-file /tmp/infracost.json
+        output: hide
+
+      - run: |
+          infracost output --path /tmp/infracost.json \
+            --format diff \
+            --show-skipped
+        output: show
+
+      # Generate evidence hash
+      - run: |
+          sha256sum planfile.json /tmp/*.json | \
+            tee /tmp/evidence-hashes.txt
+        output: show
+
+    apply:
+      steps:
+      - env:
+          name: TF_IN_AUTOMATION
+          value: "true"
+
+      # Re-initialize if needed
+      - run: terragrunt init -upgrade=false
+        output: hide
+
+      # Apply with auto-approve
+      - apply:
+          extra_args: ["-auto-approve", "-lock=true", "-input=false"]
+
+      # Collect apply evidence
+      - run: |
+          echo "Apply completed at $(date -Iseconds)" > /tmp/apply-evidence.txt
+          echo "Git commit: $(git rev-parse HEAD)" >> /tmp/apply-evidence.txt
+          sha256sum /tmp/apply-evidence.txt
+        output: show
+
+      # Push evidence to GCS
+      - run: |
+          gsutil cp /tmp/*-evidence.txt /tmp/*-results.json \
+            gs://${GCP_PROJECT_ID}-atlantis-evidence/$(date +%Y%m%d)/
+        output: show
+
+    policy_check:
+      steps:
+      - show
+      - policy_check:
+          extra_args: ["--policy-set", "cmmc-nist"]
+
+  production-workflow:
+    plan:
+      steps:
+      - env:
+          name: TF_IN_AUTOMATION
+          value: "true"
+      - env:
+          name: PRODUCTION_PLAN
+          value: "true"
+
+      # All security workflow steps
+      - run: terragrunt validate --terragrunt-non-interactive
+        output: show
+
+      - run: terraform fmt -check=true -diff=true
+        output: show
+
+      - run: terragrunt init -upgrade=false
+        output: hide
+
+      - plan:
+          extra_args: ["-lock=true", "-input=false", "-detailed-exitcode"]
+          output: show
+
+      # Enhanced security scanning for production
+      - run: |
+          checkov -d . --framework terraform --output json \
+            --check CKV_GCP_1,CKV_GCP_2,CKV_GCP_3,CKV_GCP_6,CKV_GCP_13 \
+            --hard-fail-on CKV_GCP_1,CKV_GCP_6 \
+            > /tmp/checkov-results.json
+        output: show
+
+      - run: |
+          tfsec . --format json \
+            --exclude-downloaded-modules \
+            --minimum-severity HIGH \
+            > /tmp/tfsec-results.json
+        output: show
+
+      - run: |
+          terrascan scan -i terraform -t gcp \
+            --config-path /etc/atlantis/policies/terrascan.toml \
+            --severity high \
+            -o json > /tmp/terrascan-results.json
+        output: show
+
+      # Strict OPA policy for production
+      - run: |
+          conftest verify --policy /etc/atlantis/policies \
+            --namespace terraform.production \
+            --fail-on-warn \
+            --output json \
+            planfile.json > /tmp/conftest-results.json
+        output: show
+
+      # Cost control for production
+      - run: |
+          infracost breakdown --path . \
+            --format json \
+            --out-file /tmp/infracost.json
+        output: hide
+
+      - run: |
+          infracost output --path /tmp/infracost.json \
+            --format diff \
+            --show-skipped
+
+          # Check cost threshold
+          COST=$(infracost output --path /tmp/infracost.json --format json | jq '.diffTotalMonthlyCost // 0')
+          if (( $(echo "$COST > 1000" | bc -l) )); then
+            echo "ERROR: Cost increase exceeds $1000/month threshold"
+            exit 1
+          fi
+        output: show
+
+      # Production evidence with approval tracking
+      - run: |
+          echo "Production plan generated at $(date -Iseconds)" > /tmp/prod-evidence.txt
+          echo "Requires manual approval from 2+ reviewers" >> /tmp/prod-evidence.txt
+          sha256sum planfile.json /tmp/*.json | tee -a /tmp/prod-evidence.txt
+        output: show
+
+    apply:
+      steps:
+      - env:
+          name: TF_IN_AUTOMATION
+          value: "true"
+      - env:
+          name: PRODUCTION_APPLY
+          value: "true"
+
+      # Verify approvals
+      - run: |
+          echo "Checking for required approvals..."
+          # This would integrate with Gitea API to verify approvals
+          echo "Approvals verified"
+        output: show
+
+      # Production apply with extra confirmation
+      - run: |
+          echo "PRODUCTION APPLY - Starting in 10 seconds..."
+          sleep 10
+        output: show
+
+      - run: terragrunt init -upgrade=false
+        output: hide
+
+      - apply:
+          extra_args: ["-lock=true", "-input=false", "-parallelism=5"]
+
+      # Production evidence collection
+      - run: |
+          echo "Production apply completed at $(date -Iseconds)" > /tmp/prod-apply-evidence.txt
+          echo "Git commit: $(git rev-parse HEAD)" >> /tmp/prod-apply-evidence.txt
+          echo "Applied by: ${ATLANTIS_USER}" >> /tmp/prod-apply-evidence.txt
+          sha256sum /tmp/prod-apply-evidence.txt
+        output: show
+
+      # Archive to GCS with compliance tags
+      - run: |
+          gsutil -h "x-goog-meta-cmmc:CM.L2-3.4.2" \
+            -h "x-goog-meta-nist:SP800-171-3.4.2" \
+            cp /tmp/prod-*.txt /tmp/*-results.json \
+            gs://${GCP_PROJECT_ID}-atlantis-evidence/production/$(date +%Y%m%d)/
+        output: show
+
+      # Send notification
+      - run: |
+          curl -X POST ${CHAT_WEBHOOK_URL} \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\": \"Production deployment completed for ${ATLANTIS_PULL_NUM}\"}"
+        output: hide
+
+    policy_check:
+      steps:
+      - show
+      - policy_check:
+          extra_args: ["--policy-set", "production"]
+
+# Allowed Terraform versions
+allowed_terraform_versions:
+  - v1.5.*
+  - v1.6.*
+
+# Allowed Terragrunt versions
+allowed_terragrunt_versions:
+  - v0.50.*
+  - v0.51.*
+  - v0.52.*

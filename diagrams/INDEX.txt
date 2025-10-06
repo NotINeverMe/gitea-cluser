@@ -1,0 +1,246 @@
+GITEA DEVSECOPS PLATFORM - SECURITY ARCHITECTURE DIAGRAMS
+==========================================================
+
+DIRECTORY: /home/notme/Desktop/gitea/diagrams/
+GENERATED: 2025-10-05
+RUN ID: 20251005_160510
+
+FILE INVENTORY (14 files)
+==========================================================
+
+DIAGRAM SOURCES (6 files - Render to PNG/SVG)
+----------------------------------------------
+authorization-boundary.mmd          - Mermaid Authorization Boundary Diagram
+authorization-boundary.puml         - PlantUML Authorization Boundary Diagram
+data-flow.mmd                       - Mermaid Data Flow Diagram
+data-flow.puml                      - PlantUML Data Flow Diagram
+network-topology.mmd                - Mermaid Network Topology
+evidence-flow.mmd                   - Mermaid Evidence Flow Diagram
+
+DATA INVENTORIES (2 files - Import to spreadsheet)
+---------------------------------------------------
+ASSET_INVENTORY.csv                 - 26 assets with IPs, encryption, controls
+FLOW_INVENTORY.csv                  - 52 flows with protocols, auth, encryption
+
+DOCUMENTATION (5 files - Read first)
+-------------------------------------
+README.md                           - START HERE: Overview, assumptions, controls
+QUICK_REFERENCE.md                  - Fast lookup: metrics, controls, commands
+VALIDATION_CHECKLIST.md             - Assessor review: 10 sections, 100+ checks
+DIAGRAM_GENERATION.md               - Rendering: Mermaid, PlantUML, Docker
+INDEX.txt                           - This file
+
+AUTOMATION (2 files - Execute to render)
+-----------------------------------------
+render-mermaid.sh                   - Render all Mermaid diagrams to PNG/SVG
+render-plantuml.sh                  - Render all PlantUML diagrams to PNG/SVG
+
+
+QUICK START
+==========================================================
+
+1. Read the overview:
+   $ cat README.md
+
+2. Render diagrams (choose one):
+   $ ./render-mermaid.sh
+   $ ./render-plantuml.sh
+
+3. View rendered diagrams:
+   $ xdg-open rendered/*.png
+
+4. Review validation checklist:
+   $ cat VALIDATION_CHECKLIST.md
+
+5. Package for assessor:
+   $ tar -czf diagrams-$(date +%Y%m%d).tar.gz *.mmd *.puml *.csv *.md rendered/
+
+
+KEY STATISTICS
+==========================================================
+
+Assets:     26 total (2 CUI, 10 SPA, 1 CRMA, 7 SPC, 1 OOS, 5 External)
+Flows:      52 total (38 encrypted, 50 authenticated, 15 boundary crossings)
+Zones:      6 trust zones (Internet, DMZ, App, Data, Scan, GCP Cloud)
+Controls:   25 NIST 800-171 Rev. 2 controls addressed
+Practices:  24 CMMC 2.0 Level 2 practices mapped
+Networks:   5 Docker networks with IP ranges 10.10.1-5.0/24
+
+Encryption: TLS 1.3 (HTTPS), SSH, WireGuard, AES-256-GCM (at rest)
+Auth:       OAuth2, PKI, MFA (admin), Service Accounts, API keys, HMAC
+Logging:    Prometheus, Cloud Logging, GCS immutable evidence (7-year)
+Scanning:   Trivy, Grype, Semgrep, SonarQube, Checkov, tfsec, Terrascan
+
+
+DIAGRAM DESCRIPTIONS
+==========================================================
+
+authorization-boundary.mmd/.puml
+  - All 6 trust zones with boundaries
+  - 26 assets with CMMC categories
+  - IP addressing for all components
+  - Ingress/egress control points
+  - Encryption and authentication annotations
+  - Firewall rules and network isolation
+
+data-flow.mmd/.puml
+  - All 52 data flows with unique IDs
+  - Protocol, port, auth, encryption on each flow
+  - Data classification (CUI, SPA, etc.)
+  - 9 use case flows (code commit, IaC, evidence, etc.)
+  - Trust boundary crossing indicators
+  - NIST 800-171 control references
+
+network-topology.mmd
+  - Docker network architecture
+  - 5 bridge networks with IP ranges
+  - Firewall rules (ACCEPT, REJECT, DROP)
+  - Volume encryption (LUKS, AES-256-GCM)
+  - Service discovery and DNS
+  - Port mappings and isolation
+
+evidence-flow.mmd
+  - Security scanning pipeline
+  - Evidence collection workflow (n8n)
+  - GCS storage paths and retention
+  - SHA-256 integrity verification
+  - 7-year compliance retention
+  - Monitoring and alerting integration
+
+
+ASSET CATEGORIES (CMMC 2.0)
+==========================================================
+
+[CUI] - Controlled Unclassified Information
+  A-6: Gitea (source code repository)
+  S-1: Gitea PostgreSQL database
+
+[SPA] - Security Protection Assets
+  A-4: Reverse Proxy (Caddy/Traefik)
+  A-5: VPN Gateway (WireGuard)
+  A-7: n8n Workflow Engine
+  A-8: SonarQube SAST
+  A-9: Prometheus Monitoring
+  A-10: Grafana Visualization
+  S-2: SonarQube PostgreSQL
+  S-3: n8n PostgreSQL
+  S-4: Prometheus TSDB
+
+[CRMA] - Compliance Record Maintenance Assets
+  S-5: GCS Evidence Bucket (7-year retention, immutable)
+
+[SPC] - Specialized Security Assets
+  A-11: Trivy (container CVE scanner)
+  A-12: Grype (SBOM analysis)
+  A-13: Semgrep (SAST rules)
+  A-14: Checkov (IaC security)
+  A-15: tfsec (Terraform security)
+  A-16: Terrascan (IaC compliance)
+  A-17: Infracost (cost analysis)
+
+[OOS] - Out of Scope
+  A-1: End Users (external to authorization boundary)
+
+[External] - Third-Party Dependencies
+  A-2: GCP Public APIs
+  A-3: External Registries (Docker Hub)
+  A-18: Security Command Center
+  A-19: Cloud Asset Inventory
+  A-20: Cloud Logging
+  A-21: Google Chat
+
+
+CONTROL COVERAGE
+==========================================================
+
+NIST SP 800-171 Rev. 2 (25 controls)
+-------------------------------------
+AC:  3.1.1, 3.1.12, 3.1.20
+AU:  3.3.1, 3.3.2, 3.3.5, 3.3.8, 3.3.9
+CA:  3.12.1
+CM:  3.4.1, 3.4.2
+IA:  3.5.1, 3.5.2, 3.5.3
+MP:  3.8.1, 3.8.3
+RA:  3.11.2, 3.11.3
+SC:  3.13.1, 3.13.5, 3.13.8, 3.13.11, 3.13.16
+SI:  3.14.1, 3.14.2, 3.14.6
+
+CMMC 2.0 Level 2 (24 practices)
+--------------------------------
+AC.L2-3.1.1, AC.L2-3.1.12, AC.L2-3.1.20
+AU.L2-3.3.1, AU.L2-3.3.2, AU.L2-3.3.5, AU.L2-3.3.8, AU.L2-3.3.9
+CA.L2-3.12.1
+CM.L2-3.4.1, CM.L2-3.4.2
+IA.L2-3.5.1, IA.L2-3.5.2, IA.L2-3.5.3
+MP.L2-3.8.1, MP.L2-3.8.3
+RA.L2-3.11.2, RA.L2-3.11.3
+SC.L2-3.13.1, SC.L2-3.13.5, SC.L2-3.13.8, SC.L2-3.13.11, SC.L2-3.13.16
+SI.L2-3.14.1, SI.L2-3.14.2
+
+
+VALIDATION CHECKLIST SUMMARY
+==========================================================
+
+Section 1: Authorization Boundary Diagram (ABD)
+  - Trust zone identification (6 zones)
+  - Asset categorization (26 assets)
+  - Network interfaces and IP addressing
+  - Ingress/egress points
+  - Encryption annotations
+  - Authentication and authorization
+  - Control point verification
+
+Section 2: Data Flow Diagram (DFD)
+  - Flow completeness (52 flows)
+  - Primary use case flows (9 scenarios)
+  - Trust boundary crossings (15 flows)
+  - Data classification annotations
+  - Protocol and port accuracy
+  - Authentication and encryption coverage
+
+Section 3: Network Topology Diagram
+  - Docker network configuration (5 networks)
+  - Firewall rules (7 rules)
+  - Volume encryption (LUKS, AES-256-GCM)
+  - Service discovery and DNS
+
+Section 4: Evidence Flow Diagram
+  - Evidence collection pipeline
+  - Compliance and retention (7-year)
+  - Retrieval and audit
+  - Monitoring and alerting
+
+Sections 5-10: Control coverage, quality, traceability, rendering
+
+Total: 10 sections, 100+ checkpoints
+
+
+REFERENCES
+==========================================================
+
+Standards:
+  NIST SP 800-171 Rev. 2: https://doi.org/10.6028/NIST.SP.800-171r2
+  CMMC 2.0 Model: https://dodcio.defense.gov/CMMC/Model/
+  NIST SP 800-53 Rev. 5: https://doi.org/10.6028/NIST.SP.800-53r5
+
+Tools:
+  Mermaid: https://mermaid.js.org/
+  PlantUML: https://plantuml.com/
+  Mermaid Live: https://mermaid.live/
+
+
+CONTACT
+==========================================================
+
+For questions about:
+  - Diagram content: See README.md for system owner contacts
+  - Rendering: See DIAGRAM_GENERATION.md
+  - Validation: See VALIDATION_CHECKLIST.md
+
+Generated by: Claude Code (Anthropic)
+Classification: Unclassified
+Purpose: CMMC 2.0 Level 2 Assessment Support
+
+==========================================================
+END OF INDEX
+==========================================================

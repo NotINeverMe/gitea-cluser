@@ -1,0 +1,118 @@
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#e8f5e9','secondaryColor':'#e3f2fd'}}}%%
+
+graph TB
+    subgraph SCANNING["Security Scanning Phase"]
+        style SCANNING fill:#f3e5f5,stroke:#7b1fa2,stroke-width:3px
+        TRIVY_SCAN["Trivy Scanner<br/>Container CVE Analysis"]
+        GRYPE_SCAN["Grype Scanner<br/>SBOM Generation"]
+        SEMGREP_SCAN["Semgrep<br/>SAST Analysis"]
+        CHECKOV_SCAN["Checkov<br/>IaC Security"]
+        TFSEC_SCAN["tfsec<br/>Terraform Security"]
+        SONAR_SCAN["SonarQube<br/>Code Quality"]
+    end
+
+    subgraph COLLECTION["Evidence Collection (n8n Workflow)"]
+        style COLLECTION fill:#e3f2fd,stroke:#1976d2,stroke-width:3px
+        COLLECT["Collect Raw Results<br/>JSON Aggregation"]
+        ENRICH["Enrich Metadata<br/>Timestamp, Commit SHA,<br/>Repository, Branch"]
+        HASH["Generate SHA-256 Hash<br/>Evidence Integrity"]
+        MAP_CONTROLS["Map to NIST 800-171<br/>Control Evidence Matrix"]
+        MANIFEST["Generate Manifest<br/>Evidence Catalog"]
+    end
+
+    subgraph STORAGE["Evidence Storage (GCS)"]
+        style STORAGE fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px
+        GCS_RAW["gs://evidence-bucket/raw/<br/>YYYY/MM/DD/HH/<br/>{timestamp}-{hash}.json<br/>Storage Class: Archive<br/>Encryption: CMEK AES-256-GCM"]
+        GCS_MANIFEST["gs://evidence-bucket/manifests/<br/>YYYY/MM/<br/>{timestamp}-manifest.json<br/>Storage Class: Standard<br/>Encryption: CMEK AES-256-GCM"]
+        GCS_CONTROLS["gs://evidence-bucket/controls/<br/>NIST-800-171/<br/>{control-id}/<br/>{timestamp}-evidence.json<br/>Storage Class: Archive<br/>Encryption: CMEK AES-256-GCM"]
+    end
+
+    subgraph COMPLIANCE["Compliance & Retention"]
+        style COMPLIANCE fill:#fff3e0,stroke:#f57c00,stroke-width:3px
+        RETENTION["Lifecycle Policy<br/>7-Year Retention<br/>Immutable Lock"]
+        INTEGRITY["Integrity Verification<br/>SHA-256 Validation<br/>Scheduled Audits"]
+        ACCESS_LOG["Access Logging<br/>Cloud Audit Logs<br/>Tamper Detection"]
+        VERSIONING["Object Versioning<br/>Enabled<br/>Non-Deletable"]
+    end
+
+    subgraph RETRIEVAL["Evidence Retrieval & Audit"]
+        style RETRIEVAL fill:#fff9c4,stroke:#f9a825,stroke-width:2px
+        QUERY["Query Interface<br/>n8n Workflow<br/>Control ID Search"]
+        VERIFY["Verification Process<br/>Hash Validation<br/>Chain of Custody"]
+        EXPORT["Export for Assessor<br/>ZIP Package<br/>Signed Manifest"]
+    end
+
+    subgraph MONITORING["Monitoring & Alerting"]
+        style MONITORING fill:#e1f5fe,stroke:#0288d1,stroke-width:2px
+        CLOUD_LOG["Cloud Logging<br/>Evidence Upload Events<br/>Access Logs"]
+        ALERT["Google Chat Alerts<br/>Upload Success/Failure<br/>Integrity Violations"]
+        SCC["Security Command Center<br/>Compliance Monitoring<br/>Finding Aggregation"]
+    end
+
+    %% Scanning to Collection
+    TRIVY_SCAN -->|"JSON Output<br/>CVE List"| COLLECT
+    GRYPE_SCAN -->|"JSON Output<br/>SBOM + CVEs"| COLLECT
+    SEMGREP_SCAN -->|"JSON Output<br/>SAST Findings"| COLLECT
+    CHECKOV_SCAN -->|"JSON Output<br/>IaC Issues"| COLLECT
+    TFSEC_SCAN -->|"JSON Output<br/>TF Security"| COLLECT
+    SONAR_SCAN -->|"JSON Output<br/>Quality Metrics"| COLLECT
+
+    %% Collection Pipeline
+    COLLECT -->|"Aggregated Results"| ENRICH
+    ENRICH -->|"Enriched Evidence"| HASH
+    HASH -->|"Hashed Evidence"| MAP_CONTROLS
+    MAP_CONTROLS -->|"Control Mapping"| MANIFEST
+
+    %% Storage Operations
+    HASH -->|"Upload Raw Evidence<br/>HTTPS/443<br/>Service Account OAuth2<br/>TLS 1.3"| GCS_RAW
+    MANIFEST -->|"Upload Manifest<br/>HTTPS/443<br/>Service Account OAuth2<br/>TLS 1.3"| GCS_MANIFEST
+    MAP_CONTROLS -->|"Upload Control Evidence<br/>HTTPS/443<br/>Service Account OAuth2<br/>TLS 1.3"| GCS_CONTROLS
+
+    %% Compliance Enforcement
+    GCS_RAW -->|"Apply Policy"| RETENTION
+    GCS_MANIFEST -->|"Apply Policy"| RETENTION
+    GCS_CONTROLS -->|"Apply Policy"| RETENTION
+
+    GCS_RAW -->|"Enable"| VERSIONING
+    GCS_MANIFEST -->|"Enable"| VERSIONING
+    GCS_CONTROLS -->|"Enable"| VERSIONING
+
+    GCS_RAW -->|"Scheduled Check"| INTEGRITY
+    INTEGRITY -->|"Validation Result"| ALERT
+
+    %% Retrieval Process
+    QUERY -->|"Query by Control ID<br/>or Date Range"| GCS_CONTROLS
+    QUERY -->|"Query by Hash"| GCS_RAW
+    GCS_CONTROLS -->|"Retrieve Evidence"| VERIFY
+    GCS_RAW -->|"Retrieve Evidence"| VERIFY
+    VERIFY -->|"Generate Package"| EXPORT
+
+    %% Monitoring Integration
+    GCS_RAW -->|"Access Events"| ACCESS_LOG
+    GCS_MANIFEST -->|"Access Events"| ACCESS_LOG
+    GCS_CONTROLS -->|"Access Events"| ACCESS_LOG
+
+    ACCESS_LOG -->|"Stream Logs"| CLOUD_LOG
+    CLOUD_LOG -->|"Alert on Anomaly"| ALERT
+
+    MAP_CONTROLS -->|"Finding Ingestion"| SCC
+    SCC -->|"Compliance Status"| ALERT
+
+    %% Evidence Flow Annotations
+    HASH -.->|"SHA-256 Checksum"| HASH
+    MANIFEST -.->|"Evidence Index"| MANIFEST
+
+    %% Styling
+    classDef scan fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef collect fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    classDef store fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px
+    classDef comply fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef retrieve fill:#fff9c4,stroke:#f9a825,stroke-width:2px
+    classDef monitor fill:#e1f5fe,stroke:#0288d1,stroke-width:2px
+
+    class TRIVY_SCAN,GRYPE_SCAN,SEMGREP_SCAN,CHECKOV_SCAN,TFSEC_SCAN,SONAR_SCAN scan
+    class COLLECT,ENRICH,HASH,MAP_CONTROLS,MANIFEST collect
+    class GCS_RAW,GCS_MANIFEST,GCS_CONTROLS store
+    class RETENTION,INTEGRITY,ACCESS_LOG,VERSIONING comply
+    class QUERY,VERIFY,EXPORT retrieve
+    class CLOUD_LOG,ALERT,SCC monitor

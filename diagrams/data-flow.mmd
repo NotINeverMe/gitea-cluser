@@ -1,0 +1,122 @@
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#e3f2fd','secondaryColor':'#fff3e0','tertiaryColor':'#f3e5f5'}}}%%
+
+graph TB
+    %% Actors
+    DEV["Developer<br/>A-1"]
+    ADMIN["Administrator<br/>A-1"]
+
+    %% Application Components
+    GITEA["A-6: Gitea<br/>[CUI]"]
+    N8N["A-7: n8n<br/>[SPA]"]
+    SONAR["A-8: SonarQube<br/>[SPA]"]
+    PROM["A-9: Prometheus<br/>[SPA]"]
+    GRAF["A-10: Grafana<br/>[SPA]"]
+
+    %% Data Stores
+    GITEADB["S-1: Gitea DB<br/>[CUI]<br/>AES-256-GCM"]
+    SONARDB["S-2: Sonar DB<br/>[SPA]<br/>AES-256-GCM"]
+    N8NDB["S-3: n8n DB<br/>[SPA]<br/>AES-256-GCM"]
+    PROMDB["S-4: Prom TSDB<br/>[SPA]"]
+
+    %% Security Scanners
+    TRIVY["A-11: Trivy<br/>[SPC]"]
+    GRYPE["A-12: Grype<br/>[SPC]"]
+    SEMGREP["A-13: Semgrep<br/>[SPC]"]
+    CHECKOV["A-14: Checkov<br/>[SPC]"]
+    TFSEC["A-15: tfsec<br/>[SPC]"]
+    TERRASCAN["A-16: Terrascan<br/>[SPC]"]
+    INFRACOST["A-17: Infracost<br/>[SPC]"]
+
+    %% GCP Services
+    GCS["S-5: GCS Evidence<br/>[CRMA]<br/>Immutable"]
+    SCC["A-18: Security<br/>Command Center"]
+    CAI["A-19: Cloud Asset<br/>Inventory"]
+    LOGGING["A-20: Cloud Logging"]
+    CHAT["A-21: Google Chat"]
+
+    %% External Services
+    CVEDB["A-2: CVE Databases<br/>[External]"]
+
+    %% Flow 1: Code Commit and Security Scanning
+    DEV -->|F-1: Git Push<br/>SSH/22<br/>Public Key Auth<br/>Data: Source Code [CUI]| GITEA
+    GITEA -->|F-11: Store Code<br/>PostgreSQL/5432<br/>TLS + Certificate<br/>Data: Repositories [CUI]| GITEADB
+    GITEA -->|F-15: Webhook Trigger<br/>HTTP POST<br/>HMAC-SHA256<br/>Data: Event Metadata| N8N
+
+    N8N -->|F-21: Spawn Scanner<br/>Docker Socket<br/>Unix Domain<br/>Data: Code Snapshot| TRIVY
+    N8N -->|F-22: Spawn Scanner<br/>Docker Socket<br/>Unix Domain<br/>Data: Code Snapshot| GRYPE
+    N8N -->|F-23: Spawn Scanner<br/>Docker Socket<br/>Unix Domain<br/>Data: Code Snapshot| SEMGREP
+
+    TRIVY -->|F-28: Update CVE DB<br/>HTTPS/443<br/>TLS 1.3<br/>Data: Vulnerability Signatures| CVEDB
+    GRYPE -->|F-29: Update Grype DB<br/>HTTPS/443<br/>TLS 1.3<br/>Data: Vulnerability Signatures| CVEDB
+
+    TRIVY -->|F-36: Scan Results<br/>JSON Response<br/>In-Memory<br/>Data: CVE List [CUI]| N8N
+    GRYPE -->|F-37: Scan Results<br/>JSON Response<br/>In-Memory<br/>Data: SBOM + CVEs [CUI]| N8N
+    SEMGREP -->|F-38: Scan Results<br/>JSON Response<br/>In-Memory<br/>Data: SAST Findings [CUI]| N8N
+
+    %% Flow 2: SAST Integration
+    N8N -->|F-16: Trigger Analysis<br/>HTTP/9000<br/>API Token<br/>Data: Project Key| SONAR
+    SONAR -->|F-12: Store Results<br/>PostgreSQL/5432<br/>TLS + Certificate<br/>Data: Quality Metrics [CUI]| SONARDB
+    SONAR -->|F-39: Analysis Results<br/>HTTP/9000<br/>API Token<br/>Data: Code Smells, Bugs [CUI]| N8N
+
+    %% Flow 3: IaC Security Scanning
+    DEV -->|F-40: Terraform Commit<br/>SSH/22<br/>Public Key Auth<br/>Data: IaC Files [CUI]| GITEA
+    GITEA -->|F-41: Webhook Trigger<br/>HTTP POST<br/>HMAC-SHA256<br/>Data: IaC Change Event| N8N
+
+    N8N -->|F-24: Mount IaC Files<br/>Docker Exec<br/>Volume Mount<br/>Data: Terraform Code [CUI]| CHECKOV
+    N8N -->|F-25: Mount IaC Files<br/>Docker Exec<br/>Volume Mount<br/>Data: Terraform Code [CUI]| TFSEC
+    N8N -->|F-26: Mount IaC Files<br/>Docker Exec<br/>Volume Mount<br/>Data: Terraform Code [CUI]| TERRASCAN
+    N8N -->|F-27: Mount IaC Files<br/>Docker Exec<br/>Volume Mount<br/>Data: Terraform Code [CUI]| INFRACOST
+
+    CHECKOV -->|F-42: Security Findings<br/>JSON Response<br/>In-Memory<br/>Data: Policy Violations [CUI]| N8N
+    TFSEC -->|F-43: Security Findings<br/>JSON Response<br/>In-Memory<br/>Data: Security Issues [CUI]| N8N
+    TERRASCAN -->|F-44: Compliance Findings<br/>JSON Response<br/>In-Memory<br/>Data: Compliance Gaps [CUI]| N8N
+    INFRACOST -->|F-45: Cost Analysis<br/>JSON Response<br/>In-Memory<br/>Data: Cost Breakdown| N8N
+
+    %% Flow 4: Evidence Collection and Storage
+    N8N -->|F-46: Hash Evidence<br/>SHA-256<br/>In-Process<br/>Data: Scan Results [CUI]| N8N
+    N8N -->|F-30: Upload Evidence<br/>HTTPS/443<br/>Service Account OAuth2<br/>AES-256-GCM<br/>Data: Evidence Package [CUI]| GCS
+    N8N -->|F-13: Store Workflow State<br/>PostgreSQL/5432<br/>TLS + Certificate<br/>Data: Execution Logs [SPA]| N8NDB
+
+    %% Flow 5: GCP Security Integration
+    N8N -->|F-31: Query Findings<br/>HTTPS/443<br/>Service Account OAuth2<br/>TLS 1.3<br/>Data: Finding Queries| SCC
+    N8N -->|F-32: Discover Assets<br/>HTTPS/443<br/>Service Account OAuth2<br/>TLS 1.3<br/>Data: Asset Queries| CAI
+
+    SCC -->|F-35: Push Findings<br/>Pub/Sub HTTPS/443<br/>JWT Authentication<br/>TLS 1.3<br/>Data: Security Findings [CUI]| N8N
+
+    N8N -->|F-47: Map to Controls<br/>In-Process<br/>NIST 800-171 Mapping<br/>Data: Control Evidence [CUI]| N8N
+    N8N -->|F-48: Upload Control Map<br/>HTTPS/443<br/>Service Account OAuth2<br/>AES-256-GCM<br/>Data: Compliance Manifest [CUI]| GCS
+
+    %% Flow 6: Audit Logging
+    N8N -->|F-33: Write Audit Logs<br/>HTTPS/443<br/>Service Account OAuth2<br/>TLS 1.3<br/>Data: Audit Events [CUI]| LOGGING
+    GITEA -->|F-49: Write Audit Logs<br/>HTTPS/443<br/>Service Account OAuth2<br/>TLS 1.3<br/>Data: Access Events [CUI]| LOGGING
+
+    %% Flow 7: Notifications
+    N8N -->|F-34: Send Alert<br/>HTTPS/443<br/>Webhook Secret<br/>TLS 1.3<br/>Data: Alert Summary| CHAT
+
+    %% Flow 8: Monitoring and Metrics
+    PROM -->|F-17: Scrape Metrics<br/>HTTP/9090<br/>Service Discovery<br/>Data: Gitea Metrics| GITEA
+    PROM -->|F-18: Scrape Metrics<br/>HTTP/5678<br/>Service Discovery<br/>Data: n8n Metrics| N8N
+    PROM -->|F-19: Scrape Metrics<br/>HTTP/9000<br/>Service Discovery<br/>Data: Sonar Metrics| SONAR
+    PROM -->|F-14: Store Metrics<br/>Local Write<br/>Process Isolation<br/>Data: Time Series [SPA]| PROMDB
+
+    ADMIN -->|F-50: View Dashboard<br/>HTTPS/443<br/>OAuth2 + MFA<br/>TLS 1.3<br/>Data: Visualizations| GRAF
+    GRAF -->|F-20: Query Metrics<br/>HTTP/9090<br/>Token Auth<br/>Data: PromQL Queries| PROM
+
+    %% Flow 9: Administrative Access
+    ADMIN -->|F-51: Admin Console<br/>SSH via VPN<br/>Certificate Auth<br/>MFA Required<br/>Data: Config Changes [CUI]| GITEA
+    ADMIN -->|F-52: Admin Console<br/>SSH via VPN<br/>Certificate Auth<br/>MFA Required<br/>Data: Workflow Config [SPA]| N8N
+
+    %% Styling
+    classDef cui fill:#e3f2fd,stroke:#1976d2,stroke-width:3px,color:#000
+    classDef spa fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#000
+    classDef crma fill:#e8f5e9,stroke:#388e3c,stroke-width:3px,color:#000
+    classDef spc fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+    classDef ext fill:#fff9c4,stroke:#f9a825,stroke-width:2px,color:#000
+    classDef actor fill:#fafafa,stroke:#424242,stroke-width:2px,color:#000
+
+    class GITEA,GITEADB cui
+    class N8N,SONAR,PROM,GRAF,SONARDB,N8NDB,PROMDB spa
+    class GCS crma
+    class TRIVY,GRYPE,SEMGREP,CHECKOV,TFSEC,TERRASCAN,INFRACOST spc
+    class SCC,CAI,LOGGING,CHAT,CVEDB ext
+    class DEV,ADMIN actor

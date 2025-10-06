@@ -1,0 +1,57 @@
+FROM python:3.11-slim
+
+LABEL maintainer="DevSecOps Team"
+LABEL description="GCP Evidence Collection Framework"
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    gnupg \
+    lsb-release \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install gcloud SDK
+RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | \
+    tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
+    gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
+    apt-get update && apt-get install -y google-cloud-sdk && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install yq for YAML parsing in shell scripts
+RUN curl -L https://github.com/mikefarah/yq/releases/download/v4.35.1/yq_linux_amd64 -o /usr/bin/yq && \
+    chmod +x /usr/bin/yq
+
+# Copy requirements file
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy collector scripts
+COPY gcp-scc-collector.py .
+COPY gcp-asset-inventory.py .
+COPY gcp-iam-evidence.py .
+COPY gcp-encryption-audit.py .
+COPY manifest-generator.py .
+COPY gcp-logging-export.sh .
+
+# Make scripts executable
+RUN chmod +x *.py *.sh
+
+# Create directories
+RUN mkdir -p /app/output /app/logs /app/manifests /app/config
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV GOOGLE_APPLICATION_CREDENTIALS=/app/config/gcp-service-account.json
+
+# Health check
+HEALTHCHECK --interval=300s --timeout=30s --start-period=60s --retries=3 \
+    CMD python3 -c "import sys; sys.exit(0)"
+
+# Default command
+CMD ["python3", "--version"]
