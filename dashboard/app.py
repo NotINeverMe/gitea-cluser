@@ -1599,6 +1599,86 @@ def get_alerts_history():
         return jsonify({'error': str(e)}), 500
 
 # ============================================================================
+# API ROUTES - SSDF Compliance
+# ============================================================================
+@app.route('/api/ssdf/compliance')
+def get_ssdf_compliance():
+    """Get SSDF compliance data"""
+    try:
+        # Mock data for demonstration
+        # In production, this would aggregate data from:
+        # - Gitea Actions workflow runs
+        # - n8n workflow executions
+        # - GCS evidence bucket
+        # - PostgreSQL evidence registry
+        # - SBOM artifacts
+        # - Vulnerability scan results
+
+        compliance_data = {
+            'coverage': {
+                'total': 42,
+                'covered': 42,
+                'percent': 100,
+                'by_group': {
+                    'PO': {'total': 11, 'covered': 11},
+                    'PS': {'total': 7, 'covered': 7},
+                    'PW': {'total': 16, 'covered': 16},
+                    'RV': {'total': 8, 'covered': 8}
+                }
+            },
+            'evidence_packages': 15,
+            'sboms': {
+                'total': 8,
+                'spdx_count': 8,
+                'cyclonedx_count': 8,
+                'signed_count': 8,
+                'avg_components': 145
+            },
+            'vulnerabilities': {
+                'total': 77,
+                'critical': 2,
+                'high': 7,
+                'medium': 23,
+                'low': 45,
+                'critical_high': 9,
+                'response_rate': 89,
+                'avg_response_time': '18h'
+            },
+            'workflows': [
+                {
+                    'name': 'security-scan.yml',
+                    'status': 'success',
+                    'timestamp': datetime.now() - timedelta(hours=1),
+                    'duration': '4m 23s',
+                    'practices': ['PW.7.1', 'PW.7.2', 'RV.1.1']
+                },
+                {
+                    'name': 'build.yml',
+                    'status': 'success',
+                    'timestamp': datetime.now() - timedelta(hours=2),
+                    'duration': '6m 15s',
+                    'practices': ['PW.9.1', 'PS.3.1', 'PS.3.2']
+                },
+                {
+                    'name': 'compliance.yml',
+                    'status': 'success',
+                    'timestamp': datetime.now() - timedelta(hours=3),
+                    'duration': '2m 47s',
+                    'practices': ['All 42 practices']
+                }
+            ],
+            'last_updated': datetime.now().isoformat()
+        }
+
+        # Format timestamps
+        for workflow in compliance_data['workflows']:
+            workflow['timestamp'] = workflow['timestamp'].isoformat()
+
+        return jsonify(compliance_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
 # MAIN
 # ============================================================================
 if __name__ == '__main__':
