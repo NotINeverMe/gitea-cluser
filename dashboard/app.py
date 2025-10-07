@@ -12,7 +12,7 @@ Features:
 - Professional tabbed interface
 """
 
-from flask import Flask, render_template, jsonify, request, Response
+from flask import Flask, render_template, jsonify, request, Response, send_file
 import docker
 import psutil
 import json
@@ -21,6 +21,12 @@ from collections import defaultdict, deque
 import time
 import threading
 import re
+import os
+import tarfile
+import shutil
+import subprocess
+from pathlib import Path
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 docker_client = docker.from_env()
@@ -111,6 +117,103 @@ class RequestCache:
         self.cache[key] = (value, time.time())
 
 request_cache = RequestCache(ttl_seconds=5)
+
+# ============================================================================
+# SCAN CACHE - Cache for security scan results
+# ============================================================================
+scan_cache = RequestCache(ttl_seconds=3600)  # 1 hour TTL for scans
+
+# ============================================================================
+# ALERT SYSTEM - Alert rules and active alerts
+# ============================================================================
+class AlertSystem:
+    """Alert management system"""
+
+    def __init__(self):
+        self.config_dir = Path(__file__).parent / 'config'
+        self.config_dir.mkdir(exist_ok=True)
+        self.rules_file = self.config_dir / 'alert_rules.json'
+        self.alerts_history_file = self.config_dir / 'alerts_history.json'
+        self.rules = self.load_rules()
+        self.active_alerts = []
+        self.alerts_history = self.load_history()
+        self.lock = threading.Lock()
+
+    def load_rules(self):
+        """Load alert rules from file"""
+        if self.rules_file.exists():
+            try:
+                with open(self.rules_file, 'r') as f:
+                    return json.load(f)
+            except:
+                return self.get_default_rules()
+        return self.get_default_rules()
+
+    def get_default_rules(self):
+        """Default alert rules"""
+        return [
+            {
+                'id': 'cpu_high',
+                'name': 'High CPU Usage',
+                'type': 'cpu_threshold',
+                'threshold': 80,
+                'duration': 300,  # 5 minutes
+                'enabled': True,
+                'notify_google_chat': False
+            },
+            {
+                'id': 'mem_high',
+                'name': 'High Memory Usage',
+                'type': 'memory_threshold',
+                'threshold': 85,
+                'duration': 300,
+                'enabled': True,
+                'notify_google_chat': False
+            },
+            {
+                'id': 'container_stopped',
+                'name': 'Container Stopped Unexpectedly',
+                'type': 'container_stopped',
+                'enabled': True,
+                'notify_google_chat': True
+            },
+            {
+                'id': 'health_failed',
+                'name': 'Health Check Failed',
+                'type': 'health_check_failed',
+                'threshold': 3,  # 3 consecutive failures
+                'enabled': True,
+                'notify_google_chat': True
+            }
+        ]
+
+    def save_rules(self):
+        """Save alert rules to file"""
+        with open(self.rules_file, 'w') as f:
+            json.dump(self.rules, f, indent=2)
+
+    def load_history(self):
+        """Load alerts history"""
+        if self.alerts_history_file.exists():
+            try:
+                with open(self.alerts_history_file, 'r') as f:
+                    return json.load(f)
+            except:
+                return []
+        return []
+
+    def save_history(self):
+        """Save alerts history"""
+        # Keep last 1000 alerts
+        with open(self.alerts_history_file, 'w') as f:
+            json.dump(self.alerts_history[-1000:], f, indent=2)
+
+    def check_rules(self):
+        """Check all enabled rules"""
+        # This would be called by a background thread
+        pass
+
+alert_system = AlertSystem()
 
 # ============================================================================
 # TOOL DEFINITIONS - Enhanced with stack categorization
@@ -431,7 +534,8 @@ def get_containers():
                 'stack': get_container_stack(container),
                 'category': get_container_category(container),
                 'tier': get_container_tier(container),
-                'labels': container.labels
+                'labels': container.labels,
+                'health': get_container_health_status(container)
             })
 
         # Cache result
@@ -920,6 +1024,577 @@ def get_compliance_coverage():
             'families': families,
             'coverage_percent': 89
         })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# API ROUTES - Real-Time Events Stream (SSE)
+# ============================================================================
+@app.route('/api/events/stream')
+def stream_events():
+    """Stream Docker events using Server-Sent Events"""
+    def generate():
+        stack_filter = request.args.get('stack', None)
+
+        try:
+            # Send initial connection message
+            yield f"data: {json.dumps({'type': 'connected', 'message': 'Event stream connected'})}\n\n"
+
+            # Stream Docker events
+            for event in docker_client.events(decode=True):
+                # Filter container events
+                if event.get('Type') == 'container':
+                    action = event.get('Action', '')
+                    container_name = event.get('Actor', {}).get('Attributes', {}).get('name', 'unknown')
+
+                    # Get stack info if available
+                    try:
+                        container = docker_client.containers.get(container_name)
+                        stack = get_container_stack(container)
+                        image = container.image.tags[0] if container.image.tags else 'unknown'
+                    except:
+                        stack = 'unknown'
+                        image = 'unknown'
+
+                    # Apply stack filter
+                    if stack_filter and stack != stack_filter:
+                        continue
+
+                    # Only send relevant events
+                    if action in ['start', 'stop', 'die', 'create', 'destroy', 'restart', 'health_status']:
+                        event_data = {
+                            'type': 'event',
+                            'timestamp': datetime.now().isoformat(),
+                            'action': action,
+                            'container': container_name,
+                            'image': image,
+                            'stack': stack
+                        }
+                        yield f"data: {json.dumps(event_data)}\n\n"
+
+        except GeneratorExit:
+            pass
+        except Exception as e:
+            error_data = {'type': 'error', 'message': str(e)}
+            yield f"data: {json.dumps(error_data)}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
+
+# ============================================================================
+# API ROUTES - Container Health Checks
+# ============================================================================
+@app.route('/api/container/<container_name>/health')
+def get_container_health(container_name):
+    """Get container health check details"""
+    try:
+        container = docker_client.containers.get(container_name)
+        health = container.attrs.get('State', {}).get('Health', None)
+
+        if not health:
+            return jsonify({
+                'status': 'none',
+                'message': 'No health check configured'
+            })
+
+        # Get health check config
+        health_config = container.attrs.get('Config', {}).get('Healthcheck', {})
+
+        return jsonify({
+            'status': health.get('Status', 'unknown'),
+            'failing_streak': health.get('FailingStreak', 0),
+            'last_check': health.get('Log', [{}])[-1].get('Start', None) if health.get('Log') else None,
+            'test': health_config.get('Test', []),
+            'interval': health_config.get('Interval', 0) // 1000000000,  # Convert to seconds
+            'timeout': health_config.get('Timeout', 0) // 1000000000,
+            'retries': health_config.get('Retries', 0),
+            'log': health.get('Log', [])[-10:]  # Last 10 health checks
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# API ROUTES - Enhanced Containers (with health)
+# ============================================================================
+# Update the existing get_containers to include health info
+def get_container_health_status(container):
+    """Get health status for a container"""
+    health = container.attrs.get('State', {}).get('Health', None)
+    if not health:
+        return 'none'
+    return health.get('Status', 'unknown')
+
+# ============================================================================
+# API ROUTES - Volumes Management
+# ============================================================================
+@app.route('/api/volumes')
+def get_volumes():
+    """Get all Docker volumes with detailed information"""
+    try:
+        volumes = docker_client.volumes.list()
+        volume_data = []
+
+        # Get all containers to check volume usage
+        containers = docker_client.containers.list(all=True)
+
+        for volume in volumes:
+            # Find containers using this volume
+            using_containers = []
+            for container in containers:
+                mounts = container.attrs.get('Mounts', [])
+                for mount in mounts:
+                    if mount.get('Type') == 'volume' and mount.get('Name') == volume.name:
+                        using_containers.append(container.name)
+
+            volume_data.append({
+                'name': volume.name,
+                'driver': volume.attrs['Driver'],
+                'mountpoint': volume.attrs['Mountpoint'],
+                'created': volume.attrs.get('CreatedAt', 'unknown'),
+                'labels': volume.attrs.get('Labels', {}),
+                'scope': volume.attrs.get('Scope', 'local'),
+                'used_by': using_containers,
+                'in_use': len(using_containers) > 0
+            })
+
+        return jsonify(volume_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/volume/<volume_name>/delete', methods=['POST'])
+def delete_volume(volume_name):
+    """Delete a volume (only if not in use)"""
+    try:
+        volume = docker_client.volumes.get(volume_name)
+        volume.remove()
+        return jsonify({'success': True, 'message': f'Volume {volume_name} deleted'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/volumes/prune', methods=['POST'])
+def prune_volumes():
+    """Remove all unused volumes"""
+    try:
+        result = docker_client.volumes.prune()
+        return jsonify({
+            'success': True,
+            'message': f"Pruned {len(result.get('VolumesDeleted', []))} volumes",
+            'space_reclaimed': result.get('SpaceReclaimed', 0)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# API ROUTES - Images Management & Security Scanning
+# ============================================================================
+@app.route('/api/images')
+def get_images():
+    """Get all Docker images with detailed information"""
+    try:
+        images = docker_client.images.list()
+        containers = docker_client.containers.list(all=True)
+
+        image_data = []
+        for image in images:
+            # Count containers using this image
+            using_containers = sum(1 for c in containers if c.image.id == image.id)
+
+            # Get tags
+            tags = image.tags if image.tags else ['<none>:<none>']
+
+            for tag in tags:
+                image_data.append({
+                    'id': image.id,
+                    'short_id': image.short_id,
+                    'tags': [tag],
+                    'size': image.attrs['Size'],
+                    'size_mb': round(image.attrs['Size'] / 1024 / 1024, 2),
+                    'created': image.attrs['Created'],
+                    'architecture': image.attrs.get('Architecture', 'unknown'),
+                    'os': image.attrs.get('Os', 'unknown'),
+                    'used_by_count': using_containers,
+                    'in_use': using_containers > 0,
+                    'digest': image.attrs.get('RepoDigests', [''])[0] if image.attrs.get('RepoDigests') else ''
+                })
+
+        return jsonify(image_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/image/<image_id>/scan', methods=['POST'])
+def scan_image(image_id):
+    """Scan image for vulnerabilities using Trivy"""
+    try:
+        # Check cache first
+        cached_result = scan_cache.get(f'scan_{image_id}')
+        if cached_result:
+            return jsonify(cached_result)
+
+        # Get image details
+        image = docker_client.images.get(image_id)
+        image_name = image.tags[0] if image.tags else image.id
+
+        # Run Trivy scan (if available)
+        try:
+            result = subprocess.run(
+                ['trivy', 'image', '--format', 'json', '--quiet', image_name],
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+
+            if result.returncode == 0:
+                scan_result = json.loads(result.stdout)
+
+                # Parse vulnerabilities
+                vulnerabilities = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}
+                vuln_list = []
+
+                for target in scan_result.get('Results', []):
+                    for vuln in target.get('Vulnerabilities', []):
+                        severity = vuln.get('Severity', 'UNKNOWN')
+                        if severity in vulnerabilities:
+                            vulnerabilities[severity] += 1
+
+                        vuln_list.append({
+                            'id': vuln.get('VulnerabilityID', ''),
+                            'severity': severity,
+                            'title': vuln.get('Title', ''),
+                            'description': vuln.get('Description', ''),
+                            'pkg_name': vuln.get('PkgName', ''),
+                            'installed_version': vuln.get('InstalledVersion', ''),
+                            'fixed_version': vuln.get('FixedVersion', '')
+                        })
+
+                response = {
+                    'scanned': True,
+                    'image': image_name,
+                    'vulnerabilities': vulnerabilities,
+                    'vuln_list': vuln_list[:50],  # Limit to 50 for performance
+                    'total_vulnerabilities': sum(vulnerabilities.values()),
+                    'timestamp': datetime.now().isoformat()
+                }
+
+                # Cache result
+                scan_cache.set(f'scan_{image_id}', response)
+
+                return jsonify(response)
+            else:
+                return jsonify({
+                    'scanned': False,
+                    'error': 'Trivy scan failed',
+                    'message': result.stderr
+                })
+        except FileNotFoundError:
+            return jsonify({
+                'scanned': False,
+                'error': 'Trivy not installed',
+                'message': 'Install Trivy to enable vulnerability scanning'
+            })
+        except subprocess.TimeoutExpired:
+            return jsonify({
+                'scanned': False,
+                'error': 'Scan timeout',
+                'message': 'Scan took too long'
+            })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/image/<image_id>/delete', methods=['POST'])
+def delete_image(image_id):
+    """Delete an image"""
+    try:
+        docker_client.images.remove(image_id, force=request.json.get('force', False))
+        return jsonify({'success': True, 'message': 'Image deleted'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/images/prune', methods=['POST'])
+def prune_images():
+    """Remove dangling images"""
+    try:
+        result = docker_client.images.prune()
+        return jsonify({
+            'success': True,
+            'message': f"Pruned {len(result.get('ImagesDeleted', []))} images",
+            'space_reclaimed': result.get('SpaceReclaimed', 0)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# API ROUTES - Networks & Topology
+# ============================================================================
+@app.route('/api/networks')
+def get_networks():
+    """Get all Docker networks with topology information"""
+    try:
+        networks = docker_client.networks.list()
+        network_data = []
+
+        for network in networks:
+            containers_info = []
+            containers_dict = network.attrs.get('Containers', {})
+
+            for container_id, container_info in containers_dict.items():
+                containers_info.append({
+                    'id': container_id[:12],
+                    'name': container_info.get('Name', 'unknown'),
+                    'ipv4': container_info.get('IPv4Address', ''),
+                    'ipv6': container_info.get('IPv6Address', '')
+                })
+
+            ipam_config = network.attrs.get('IPAM', {}).get('Config', [{}])[0]
+
+            network_data.append({
+                'id': network.id,
+                'name': network.name,
+                'driver': network.attrs['Driver'],
+                'scope': network.attrs['Scope'],
+                'internal': network.attrs.get('Internal', False),
+                'attachable': network.attrs.get('Attachable', False),
+                'subnet': ipam_config.get('Subnet', ''),
+                'gateway': ipam_config.get('Gateway', ''),
+                'containers': containers_info,
+                'container_count': len(containers_info),
+                'labels': network.attrs.get('Labels', {})
+            })
+
+        return jsonify(network_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/network/<network_name>/topology')
+def get_network_topology(network_name):
+    """Get network topology for visualization"""
+    try:
+        network = docker_client.networks.get(network_name)
+
+        nodes = []
+        edges = []
+
+        # Add network node
+        nodes.append({
+            'id': f'net_{network.id[:12]}',
+            'label': network.name,
+            'type': 'network',
+            'driver': network.attrs['Driver']
+        })
+
+        # Add container nodes and edges
+        containers_dict = network.attrs.get('Containers', {})
+        for container_id, container_info in containers_dict.items():
+            container_node_id = f'cont_{container_id[:12]}'
+            nodes.append({
+                'id': container_node_id,
+                'label': container_info.get('Name', 'unknown'),
+                'type': 'container',
+                'ipv4': container_info.get('IPv4Address', '')
+            })
+
+            # Add edge from network to container
+            edges.append({
+                'from': f'net_{network.id[:12]}',
+                'to': container_node_id
+            })
+
+        return jsonify({
+            'network': network.name,
+            'nodes': nodes,
+            'edges': edges
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# API ROUTES - Container Terminal (Exec)
+# ============================================================================
+ALLOWED_COMMANDS = [
+    'ls', 'pwd', 'whoami', 'hostname', 'ps', 'top', 'df', 'du', 'free',
+    'cat', 'head', 'tail', 'grep', 'find', 'which', 'env', 'printenv',
+    'date', 'uptime', 'uname', 'netstat', 'ss', 'ip', 'ping', 'curl', 'wget'
+]
+
+BLOCKED_COMMANDS = ['rm', 'dd', 'mkfs', ':(){', 'fork', '>()', 'shutdown', 'reboot', 'halt']
+
+def is_command_safe(command):
+    """Check if command is safe to execute"""
+    # Block dangerous commands
+    for blocked in BLOCKED_COMMANDS:
+        if blocked in command.lower():
+            return False, f"Blocked command: {blocked}"
+
+    # Check if first word is in allowed commands
+    first_word = command.strip().split()[0] if command.strip() else ''
+    base_command = first_word.split('/')[-1]  # Handle paths like /bin/ls
+
+    if base_command not in ALLOWED_COMMANDS:
+        return False, f"Command not in whitelist: {base_command}"
+
+    return True, "OK"
+
+@app.route('/api/container/<container_name>/exec', methods=['POST'])
+def container_exec(container_name):
+    """Execute command in container"""
+    try:
+        data = request.json
+        command = data.get('command', '')
+
+        if not command:
+            return jsonify({'error': 'No command provided'}), 400
+
+        # Check command safety
+        safe, message = is_command_safe(command)
+        if not safe:
+            return jsonify({'error': message, 'blocked': True}), 403
+
+        container = docker_client.containers.get(container_name)
+
+        # Execute command
+        result = container.exec_run(
+            command,
+            stream=False,
+            demux=True,
+            tty=False
+        )
+
+        # Parse output
+        stdout = result.output[0].decode('utf-8') if result.output[0] else ''
+        stderr = result.output[1].decode('utf-8') if result.output[1] else ''
+
+        return jsonify({
+            'success': True,
+            'exit_code': result.exit_code,
+            'stdout': stdout,
+            'stderr': stderr,
+            'command': command
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# API ROUTES - Backup & Restore
+# ============================================================================
+BACKUP_DIR = Path(__file__).parent / 'backups'
+BACKUP_DIR.mkdir(exist_ok=True)
+
+@app.route('/api/container/<container_name>/backup', methods=['POST'])
+def backup_container(container_name):
+    """Backup container filesystem and metadata"""
+    try:
+        container = docker_client.containers.get(container_name)
+
+        # Create backup directory
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_name = f"{container_name}_{timestamp}"
+        backup_path = BACKUP_DIR / backup_name
+        backup_path.mkdir(exist_ok=True)
+
+        # Export container filesystem
+        tar_file = backup_path / f"{backup_name}.tar"
+
+        # Get container export
+        with open(tar_file, 'wb') as f:
+            for chunk in container.export():
+                f.write(chunk)
+
+        # Save metadata
+        metadata = {
+            'name': container.name,
+            'image': container.image.tags[0] if container.image.tags else container.image.id,
+            'env': container.attrs.get('Config', {}).get('Env', []),
+            'labels': container.labels,
+            'volumes': [m['Name'] for m in container.attrs.get('Mounts', []) if m.get('Type') == 'volume'],
+            'networks': list(container.attrs.get('NetworkSettings', {}).get('Networks', {}).keys()),
+            'ports': container.ports,
+            'created': container.attrs['Created'],
+            'backup_timestamp': timestamp
+        }
+
+        with open(backup_path / 'metadata.json', 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        return jsonify({
+            'success': True,
+            'backup_name': backup_name,
+            'size': tar_file.stat().st_size,
+            'path': str(backup_path)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/backups')
+def list_backups():
+    """List all available backups"""
+    try:
+        backups = []
+        for backup_dir in BACKUP_DIR.iterdir():
+            if backup_dir.is_dir():
+                metadata_file = backup_dir / 'metadata.json'
+                tar_file = backup_dir / f"{backup_dir.name}.tar"
+
+                if metadata_file.exists():
+                    with open(metadata_file, 'r') as f:
+                        metadata = json.load(f)
+
+                    backups.append({
+                        'name': backup_dir.name,
+                        'container': metadata.get('name', 'unknown'),
+                        'timestamp': metadata.get('backup_timestamp', ''),
+                        'size': tar_file.stat().st_size if tar_file.exists() else 0,
+                        'path': str(backup_dir)
+                    })
+
+        return jsonify(backups)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# API ROUTES - Alerts Management
+# ============================================================================
+@app.route('/api/alerts/rules')
+def get_alert_rules():
+    """Get all alert rules"""
+    try:
+        return jsonify(alert_system.rules)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/alerts/rules', methods=['POST'])
+def create_alert_rule():
+    """Create new alert rule"""
+    try:
+        rule = request.json
+        rule['id'] = f"rule_{len(alert_system.rules) + 1}"
+        alert_system.rules.append(rule)
+        alert_system.save_rules()
+        return jsonify({'success': True, 'rule': rule})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/alerts/rules/<rule_id>', methods=['DELETE'])
+def delete_alert_rule(rule_id):
+    """Delete alert rule"""
+    try:
+        alert_system.rules = [r for r in alert_system.rules if r['id'] != rule_id]
+        alert_system.save_rules()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/alerts/active')
+def get_active_alerts():
+    """Get active alerts"""
+    try:
+        return jsonify(alert_system.active_alerts)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/alerts/history')
+def get_alerts_history():
+    """Get alerts history"""
+    try:
+        limit = int(request.args.get('limit', 100))
+        return jsonify(alert_system.alerts_history[-limit:])
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

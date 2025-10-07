@@ -1,0 +1,7 @@
+# Example variables for using the Gitea Stack module
+# Copy to terraform.tfvars and customize
+
+admin_username = "admin"
+admin_password = "SuperSecure@2024Pass!"  # Min 14 chars with upper+lower+digit+special
+admin_email    = "admin@company.com"
+gitea_domain   = "git.company.com"

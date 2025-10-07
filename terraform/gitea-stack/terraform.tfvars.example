@@ -1,0 +1,88 @@
+# Example Terraform Variables for Gitea Stack
+# Copy this file to terraform.tfvars and customize
+
+# REQUIRED: Admin credentials
+admin_username = "admin"
+admin_password = "ChangeMe@SuperSecure123!"  # Min 14 chars: upper+lower+digit+special
+admin_email    = "admin@example.com"
+
+# Stack configuration
+stack_name = "gitea"
+
+# Domain and URL configuration
+gitea_domain   = "git.example.com"
+#gitea_root_url = "https://git.example.com/"  # Auto-generated if not set
+
+# Port configuration
+gitea_http_port  = 10000
+gitea_ssh_port   = 10001
+postgres_port    = 10002
+dashboard_port   = 8000
+
+# Caddy ports (when enabled)
+caddy_https_port = 443
+caddy_http_port  = 80
+
+# Component toggles
+enable_runner    = true   # Enable CI/CD runner
+enable_caddy     = false  # Enable HTTPS proxy (set true for production)
+enable_dashboard = true   # Enable DevSecOps dashboard
+
+# Image versions
+gitea_image     = "gitea/gitea:1.21-rootless"
+postgres_image  = "postgres:15-alpine"
+runner_image    = "gitea/act_runner:latest"
+caddy_image     = "caddy:2-alpine"
+dashboard_image = "devsecops-dashboard:latest"
+
+# Resource limits - PostgreSQL
+postgres_cpu_limit    = 2     # CPU cores
+postgres_memory_limit = 2048  # MB
+
+# Resource limits - Gitea
+gitea_cpu_limit    = 4     # CPU cores
+gitea_memory_limit = 4096  # MB
+
+# Resource limits - Runner
+runner_cpu_limit    = 4     # CPU cores
+runner_memory_limit = 8192  # MB
+
+# Security configuration
+gitea_disable_registration = false  # Set true to disable self-registration
+gitea_require_signin_view  = false  # Set true to require login to view
+gitea_cookie_secure        = false  # Set true when using HTTPS
+gitea_webhook_skip_tls     = false  # Set true for self-signed certs (not recommended)
+
+# Rootless configuration
+gitea_rootless = true
+gitea_user_uid = 1000
+gitea_user_gid = 1000
+
+# Database password (auto-generated if not set)
+#postgres_password = "GeneratedSecurePassword123!"
+
+# Security tokens (auto-generated if not set)
+#gitea_secret_key        = ""  # 64 chars
+#gitea_internal_token    = ""  # 128 chars
+#gitea_oauth2_jwt_secret = ""  # 44 chars
+#gitea_metrics_token     = ""  # 32 chars
+
+# Runner token (set after getting from Gitea admin panel)
+#gitea_runner_token = ""
+
+# File paths (optional)
+#caddyfile_path     = "./config/Caddyfile"
+#runner_config_path = "./config/runner-config.yaml"
+#backup_path        = "/backups/gitea"
+
+# Network configuration
+network_subnet_default    = "172.20.0.0/16"
+network_subnet_data       = "172.21.0.0/16"  # Internal network
+network_subnet_monitoring = "172.22.0.0/16"
+
+# Additional labels for all resources
+additional_labels = {
+  environment = "development"
+  managed_by  = "terraform"
+  team        = "platform"
+}

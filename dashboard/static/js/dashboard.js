@@ -111,19 +111,19 @@ const API = {
     },
 
     async getDockerImages() {
-        const response = await fetch('/api/docker/images');
+        const response = await fetch('/api/images');
         if (!response.ok) throw new Error('Failed to fetch images');
         return await response.json();
     },
 
     async getDockerVolumes() {
-        const response = await fetch('/api/docker/volumes');
+        const response = await fetch('/api/volumes');
         if (!response.ok) throw new Error('Failed to fetch volumes');
         return await response.json();
     },
 
     async getDockerNetworks() {
-        const response = await fetch('/api/docker/networks');
+        const response = await fetch('/api/networks');
         if (!response.ok) throw new Error('Failed to fetch networks');
         return await response.json();
     }
@@ -236,6 +236,15 @@ async function loadTabData(tabName) {
                 break;
             case 'metrics':
                 await loadMetricsData();
+                break;
+            case 'terminal':
+                await loadTerminalTab();
+                break;
+            case 'volumes':
+                await loadVolumesTab();
+                break;
+            case 'images':
+                await loadImagesTab();
                 break;
         }
     } catch (error) {
@@ -880,12 +889,341 @@ function setupKeyboardShortcuts() {
                 e.preventDefault();
                 switchTab('metrics');
                 break;
+            case '6':
+                e.preventDefault();
+                switchTab('terminal');
+                break;
+            case '7':
+                e.preventDefault();
+                switchTab('volumes');
+                break;
+            case '8':
+                e.preventDefault();
+                switchTab('images');
+                break;
             case 'Escape':
                 e.preventDefault();
                 Modal.hideAll();
                 break;
         }
     });
+}
+
+// ============================================================================
+// VOLUMES TAB
+// ============================================================================
+async function loadVolumesTab() {
+    try {
+        const volumes = await API.getDockerVolumes();
+        renderVolumes(volumes);
+    } catch (error) {
+        console.error('Error loading volumes:', error);
+        Toast.error('Failed to load volumes');
+    }
+}
+
+function renderVolumes(volumes) {
+    const grid = document.getElementById('volumes-grid');
+    if (!grid) return;
+
+    if (volumes.length === 0) {
+        grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">💾</div><div class="empty-state-text">No volumes found</div></div>';
+        return;
+    }
+
+    grid.innerHTML = volumes.map(volume => `
+        <div class="volume-card">
+            <div class="volume-name">${volume.name}</div>
+            <div class="volume-driver">Driver: ${volume.driver}</div>
+            <div class="volume-usage">
+                <div class="volume-usage-label">Used by ${volume.used_by.length} container(s)</div>
+                ${volume.used_by.length > 0 ? `
+                    <ul class="volume-container-list">
+                        ${volume.used_by.map(c => `<li>• ${c}</li>`).join('')}
+                    </ul>
+                ` : '<div style="color: var(--text-muted); font-size: 0.875rem;">Not in use</div>'}
+            </div>
+            <div class="card-actions" style="margin-top: 1rem;">
+                ${!volume.in_use ? `
+                    <button class="btn btn-danger btn-full" onclick="deleteVolume('${volume.name}')">Delete</button>
+                ` : `
+                    <button class="btn btn-full" disabled title="Volume is in use">Delete (In Use)</button>
+                `}
+            </div>
+        </div>
+    `).join('');
+}
+
+async function deleteVolume(volumeName) {
+    if (!confirm(`Are you sure you want to delete volume "${volumeName}"?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/volume/${volumeName}/delete`, { method: 'POST' });
+        const data = await response.json();
+
+        if (data.success) {
+            Toast.success(data.message);
+            loadVolumesTab();
+        } else {
+            Toast.error(data.error || 'Failed to delete volume');
+        }
+    } catch (error) {
+        Toast.error('Failed to delete volume');
+    }
+}
+
+async function pruneVolumes() {
+    if (!confirm('Are you sure you want to prune all unused volumes? This cannot be undone.')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/volumes/prune', { method: 'POST' });
+        const data = await response.json();
+
+        if (data.success) {
+            Toast.success(data.message);
+            loadVolumesTab();
+        } else {
+            Toast.error(data.error || 'Failed to prune volumes');
+        }
+    } catch (error) {
+        Toast.error('Failed to prune volumes');
+    }
+}
+
+// ============================================================================
+// IMAGES TAB
+// ============================================================================
+async function loadImagesTab() {
+    try {
+        const images = await API.getDockerImages();
+        renderImages(images);
+    } catch (error) {
+        console.error('Error loading images:', error);
+        Toast.error('Failed to load images');
+    }
+}
+
+function renderImages(images) {
+    const list = document.getElementById('images-list');
+    if (!list) return;
+
+    if (images.length === 0) {
+        list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">💿</div><div class="empty-state-text">No images found</div></div>';
+        return;
+    }
+
+    list.innerHTML = images.map(image => `
+        <div class="image-card">
+            <div class="image-info">
+                <div class="image-tag">${image.tags[0]}</div>
+                <div class="image-meta">
+                    <span class="image-meta-item">📏 ${image.size_mb} MB</span>
+                    <span class="image-meta-item">🏗️ ${image.architecture}</span>
+                    <span class="image-meta-item">📦 ${image.used_by_count} container(s)</span>
+                    <span class="image-meta-item">🕐 ${new Date(image.created).toLocaleDateString()}</span>
+                </div>
+            </div>
+            <div class="image-actions">
+                <button class="btn btn-primary" onclick="scanImage('${image.id}', '${image.tags[0]}')">🔍 Scan</button>
+                <button class="btn btn-danger" onclick="deleteImage('${image.id}', ${image.in_use})" ${image.in_use ? 'title="Image is in use"' : ''}>Delete</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function scanImage(imageId, imageName) {
+    Modal.show('scan-modal');
+    document.getElementById('scan-modal-title').textContent = `Scanning: ${imageName}`;
+    document.getElementById('scan-modal-body').innerHTML = '<div class="loading"><div class="loading-spinner"></div>Scanning for vulnerabilities...</div>';
+
+    try {
+        const response = await fetch(`/api/image/${imageId}/scan`, { method: 'POST' });
+        const data = await response.json();
+
+        if (data.scanned) {
+            document.getElementById('scan-modal-body').innerHTML = `
+                <div class="scan-results">
+                    <div class="scan-severity">
+                        <span class="scan-severity-count severity-critical">${data.vulnerabilities.CRITICAL || 0}</span>
+                        <span class="scan-severity-label">Critical</span>
+                    </div>
+                    <div class="scan-severity">
+                        <span class="scan-severity-count severity-high">${data.vulnerabilities.HIGH || 0}</span>
+                        <span class="scan-severity-label">High</span>
+                    </div>
+                    <div class="scan-severity">
+                        <span class="scan-severity-count severity-medium">${data.vulnerabilities.MEDIUM || 0}</span>
+                        <span class="scan-severity-label">Medium</span>
+                    </div>
+                    <div class="scan-severity">
+                        <span class="scan-severity-count severity-low">${data.vulnerabilities.LOW || 0}</span>
+                        <span class="scan-severity-label">Low</span>
+                    </div>
+                </div>
+                <div style="margin-top: 1rem; max-height: 400px; overflow-y: auto;">
+                    <h4>Top Vulnerabilities (showing ${data.vuln_list.length} of ${data.total_vulnerabilities})</h4>
+                    ${data.vuln_list.map(v => `
+                        <div style="background: var(--bg-tertiary); padding: 1rem; margin-bottom: 0.5rem; border-radius: 6px; border-left: 3px solid ${v.severity === 'CRITICAL' ? 'var(--accent-red)' : v.severity === 'HIGH' ? 'var(--accent-orange)' : v.severity === 'MEDIUM' ? 'var(--accent-yellow)' : 'var(--accent-blue)'};">
+                            <div style="font-weight: 600; margin-bottom: 0.5rem;">${v.id} - ${v.severity}</div>
+                            <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">${v.title || 'No title'}</div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);">
+                                Package: ${v.pkg_name} (${v.installed_version})
+                                ${v.fixed_version ? ` → Fixed in: ${v.fixed_version}` : ''}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        } else {
+            document.getElementById('scan-modal-body').innerHTML = `
+                <div class="error">${data.error || 'Scan failed'}</div>
+                <p>${data.message || ''}</p>
+            `;
+        }
+    } catch (error) {
+        document.getElementById('scan-modal-body').innerHTML = `<div class="error">Error: ${error.message}</div>`;
+    }
+}
+
+async function deleteImage(imageId, inUse) {
+    if (inUse && !confirm('This image is in use by containers. Force delete anyway?')) {
+        return;
+    }
+
+    if (!inUse && !confirm('Are you sure you want to delete this image?')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/image/${imageId}/delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ force: inUse })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            Toast.success('Image deleted');
+            loadImagesTab();
+        } else {
+            Toast.error(data.error || 'Failed to delete image');
+        }
+    } catch (error) {
+        Toast.error('Failed to delete image');
+    }
+}
+
+async function pruneImages() {
+    if (!confirm('Are you sure you want to prune all dangling images?')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/images/prune', { method: 'POST' });
+        const data = await response.json();
+
+        if (data.success) {
+            Toast.success(data.message);
+            loadImagesTab();
+        } else {
+            Toast.error(data.error || 'Failed to prune images');
+        }
+    } catch (error) {
+        Toast.error('Failed to prune images');
+    }
+}
+
+async function scanAllImages() {
+    Toast.info('Scanning all images... This may take a while.');
+    // Implementation would scan all images sequentially
+}
+
+// ============================================================================
+// EVENTS FEED
+// ============================================================================
+let eventsSource = null;
+
+function startEventsFeed() {
+    if (eventsSource) {
+        eventsSource.close();
+    }
+
+    const feedContent = document.getElementById('events-feed-content');
+    if (!feedContent) return;
+
+    feedContent.innerHTML = '<div class="events-feed-status">Connecting...</div>';
+
+    eventsSource = new EventSource('/api/events/stream');
+
+    eventsSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.type === 'connected') {
+            feedContent.innerHTML = '<div class="events-feed-status">Connected • Waiting for events...</div>';
+        } else if (data.type === 'event') {
+            // Remove status message if it's the first event
+            const statusMsg = feedContent.querySelector('.events-feed-status');
+            if (statusMsg) {
+                statusMsg.remove();
+            }
+
+            // Add event to feed
+            const eventDiv = document.createElement('div');
+            eventDiv.className = `event-item event-${data.action}`;
+            eventDiv.innerHTML = `
+                <div class="event-timestamp">${new Date(data.timestamp).toLocaleTimeString()}</div>
+                <div class="event-action">${getEventIcon(data.action)} ${data.action}</div>
+                <div class="event-container">${data.container}</div>
+                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">${data.stack}</div>
+            `;
+
+            feedContent.insertBefore(eventDiv, feedContent.firstChild);
+
+            // Keep only last 20 events
+            while (feedContent.children.length > 20) {
+                feedContent.removeChild(feedContent.lastChild);
+            }
+
+            // Show toast for critical events
+            if (data.action === 'die' || data.action === 'destroy') {
+                Toast.error(`Container ${data.container} ${data.action}`);
+            }
+        }
+    };
+
+    eventsSource.onerror = () => {
+        feedContent.innerHTML = '<div class="events-feed-status">Connection lost. Reconnecting...</div>';
+        setTimeout(() => {
+            if (eventsSource) {
+                startEventsFeed();
+            }
+        }, 5000);
+    };
+}
+
+function toggleEventsFeed() {
+    const widget = document.getElementById('events-feed-widget');
+    if (widget) {
+        widget.style.display = widget.style.display === 'none' ? 'flex' : 'none';
+    }
+}
+
+function getEventIcon(action) {
+    const icons = {
+        'start': '✅',
+        'create': '✅',
+        'stop': '⏹️',
+        'die': '❌',
+        'destroy': '❌',
+        'restart': '🔄',
+        'health_status': '💊'
+    };
+    return icons[action] || '📌';
 }
 
 // ============================================================================
@@ -915,6 +1253,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Start auto-refresh
     startAutoRefresh();
 
+    // Start events feed
+    startEventsFeed();
+
+    // Load active alerts
+    loadActiveAlerts();
+
     console.log('DevSecOps Dashboard initialized successfully');
 });
 
@@ -929,3 +1273,12 @@ window.toggleStackContainers = toggleStackContainers;
 window.toggleTheme = toggleTheme;
 window.toggleAutoRefresh = toggleAutoRefresh;
 window.loadContainerLogs = loadContainerLogs;
+window.deleteVolume = deleteVolume;
+window.pruneVolumes = pruneVolumes;
+window.scanImage = scanImage;
+window.deleteImage = deleteImage;
+window.pruneImages = pruneImages;
+window.scanAllImages = scanAllImages;
+window.toggleEventsFeed = toggleEventsFeed;
+window.API = API;
+window.Modal = Modal;

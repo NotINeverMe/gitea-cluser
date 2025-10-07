@@ -10,6 +10,9 @@
 
     <!-- Chart.js from CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+    <!-- D3.js for Network Visualization -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
 <body>
     <!-- ========================================================================
@@ -43,6 +46,9 @@
                     </div>
                 </div>
 
+                <button class="alerts-btn" onclick="Modal.show('alerts-config-modal'); loadAlertRules();" title="Alerts">
+                    🔔 <span class="alerts-badge" id="alerts-badge">0</span>
+                </button>
                 <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">🌓</button>
                 <button class="settings-btn" onclick="toggleAutoRefresh()" title="Toggle auto-refresh">⚙</button>
             </div>
@@ -59,6 +65,9 @@
             <button class="tab-btn" data-tab="stacks">📚 Stacks <span class="tab-badge" id="stacks-count">0</span></button>
             <button class="tab-btn" data-tab="logs">📄 Logs</button>
             <button class="tab-btn" data-tab="metrics">📈 Metrics</button>
+            <button class="tab-btn" data-tab="terminal">💻 Terminal</button>
+            <button class="tab-btn" data-tab="volumes">💾 Volumes</button>
+            <button class="tab-btn" data-tab="images">💿 Images</button>
         </div>
     </nav>
 
@@ -71,6 +80,17 @@
              OVERVIEW TAB
              ==================================================================== -->
         <div id="tab-overview" class="tab-content active">
+            <!-- Events Feed Widget -->
+            <div class="events-feed-widget" id="events-feed-widget">
+                <div class="events-feed-header">
+                    <h3 class="events-feed-title">🔄 Live Events</h3>
+                    <button class="btn" onclick="toggleEventsFeed()">Toggle</button>
+                </div>
+                <div class="events-feed-content" id="events-feed-content">
+                    <div class="events-feed-status">Connecting...</div>
+                </div>
+            </div>
+
             <!-- Quick Stats -->
             <div class="overview-grid">
                 <div class="stat-card">
@@ -349,6 +369,80 @@
             </div>
         </div>
 
+        <!-- ====================================================================
+             TERMINAL TAB
+             ==================================================================== -->
+        <div id="tab-terminal" class="tab-content">
+            <div class="filter-bar mb-2">
+                <div class="filter-row">
+                    <div class="filter-label">Container:</div>
+                    <select id="terminal-container-select" class="search-input" style="max-width: 300px;">
+                        <option value="">Select a container...</option>
+                    </select>
+                    <button class="btn btn-danger" onclick="clearTerminal()">Clear</button>
+                </div>
+            </div>
+
+            <!-- Quick Commands -->
+            <div class="terminal-shortcuts mb-2">
+                <button class="btn" onclick="execQuickCommand('ls -la')">ls -la</button>
+                <button class="btn" onclick="execQuickCommand('pwd')">pwd</button>
+                <button class="btn" onclick="execQuickCommand('ps aux')">ps aux</button>
+                <button class="btn" onclick="execQuickCommand('df -h')">df -h</button>
+                <button class="btn" onclick="execQuickCommand('free -m')">free -m</button>
+                <button class="btn" onclick="execQuickCommand('env')">env</button>
+            </div>
+
+            <!-- Terminal Output -->
+            <div class="terminal-viewer" id="terminal-output"></div>
+
+            <!-- Command Input -->
+            <div class="terminal-input-wrapper">
+                <input type="text" id="terminal-input" class="terminal-input" placeholder="$ Enter command..." />
+                <button class="btn btn-primary" onclick="executeTerminalCommand()">Execute</button>
+            </div>
+        </div>
+
+        <!-- ====================================================================
+             VOLUMES TAB
+             ==================================================================== -->
+        <div id="tab-volumes" class="tab-content">
+            <div class="filter-bar mb-2">
+                <div class="filter-row">
+                    <button class="btn btn-danger" onclick="pruneVolumes()">⚠ Prune Unused Volumes</button>
+                </div>
+            </div>
+
+            <div class="cards-grid" id="volumes-grid">
+                <div class="loading">
+                    <div class="loading-spinner"></div>
+                    Loading volumes...
+                </div>
+            </div>
+        </div>
+
+        <!-- ====================================================================
+             IMAGES TAB
+             ==================================================================== -->
+        <div id="tab-images" class="tab-content">
+            <div class="filter-bar mb-2">
+                <div class="filter-row">
+                    <button class="btn btn-primary" onclick="scanAllImages()">🔍 Scan All Images</button>
+                    <button class="btn btn-danger" onclick="pruneImages()">⚠ Prune Dangling Images</button>
+                    <div class="search-box">
+                        <input type="text" id="images-search-input" class="search-input" placeholder="🔍 Search images...">
+                    </div>
+                </div>
+            </div>
+
+            <div class="images-list" id="images-list">
+                <div class="loading">
+                    <div class="loading-spinner"></div>
+                    Loading images...
+                </div>
+            </div>
+        </div>
+
     </main>
 
     <!-- ========================================================================
@@ -400,7 +494,7 @@
                 <div style="color: var(--text-secondary); font-size: 0.875rem;">
                     <p><kbd>/</kbd> - Focus search</p>
                     <p><kbd>r</kbd> - Refresh current tab</p>
-                    <p><kbd>1-5</kbd> - Switch tabs</p>
+                    <p><kbd>1-8</kbd> - Switch tabs</p>
                     <p><kbd>Esc</kbd> - Close modals</p>
                 </div>
             </div>
@@ -410,11 +504,103 @@
         </div>
     </div>
 
+    <!-- Health Check Modal -->
+    <div class="modal" id="health-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title" id="health-modal-title">Container Health Check</div>
+                <button class="modal-close" onclick="Modal.hide('health-modal')">×</button>
+            </div>
+            <div class="modal-body" id="health-modal-body">
+                <div class="loading">Loading health check data...</div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="Modal.hide('health-modal')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Image Scan Modal -->
+    <div class="modal" id="scan-modal">
+        <div class="modal-content" style="max-width: 1200px;">
+            <div class="modal-header">
+                <div class="modal-title" id="scan-modal-title">Security Scan Results</div>
+                <button class="modal-close" onclick="Modal.hide('scan-modal')">×</button>
+            </div>
+            <div class="modal-body" id="scan-modal-body">
+                <div class="loading">Scanning image...</div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="Modal.hide('scan-modal')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Backup Modal -->
+    <div class="modal" id="backup-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title" id="backup-modal-title">Container Backup</div>
+                <button class="modal-close" onclick="Modal.hide('backup-modal')">×</button>
+            </div>
+            <div class="modal-body" id="backup-modal-body">
+                <p>Create a backup of this container's filesystem and configuration.</p>
+                <div class="mt-2">
+                    <label><input type="checkbox" id="backup-include-volumes" checked> Include volume data</label>
+                </div>
+                <div class="mt-2">
+                    <label><input type="checkbox" id="backup-include-config" checked> Include configuration</label>
+                </div>
+                <div class="mt-2" id="backup-status"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="Modal.hide('backup-modal')">Cancel</button>
+                <button class="btn btn-primary" onclick="performBackup()">Create Backup</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Network Topology Modal -->
+    <div class="modal" id="network-modal">
+        <div class="modal-content" style="max-width: 1200px;">
+            <div class="modal-header">
+                <div class="modal-title" id="network-modal-title">Network Topology</div>
+                <button class="modal-close" onclick="Modal.hide('network-modal')">×</button>
+            </div>
+            <div class="modal-body">
+                <div id="network-topology-viz" style="width: 100%; height: 500px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-tertiary);"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="Modal.hide('network-modal')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alerts Configuration Modal -->
+    <div class="modal" id="alerts-config-modal">
+        <div class="modal-content" style="max-width: 900px;">
+            <div class="modal-header">
+                <div class="modal-title">Alert Rules Configuration</div>
+                <button class="modal-close" onclick="Modal.hide('alerts-config-modal')">×</button>
+            </div>
+            <div class="modal-body" id="alerts-config-body">
+                <div class="loading">Loading alert rules...</div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="Modal.hide('alerts-config-modal')">Close</button>
+                <button class="btn btn-primary" onclick="addAlertRule()">Add New Rule</button>
+            </div>
+        </div>
+    </div>
+
     <!-- ========================================================================
          SCRIPTS
          ======================================================================== -->
     <script src="/static/js/dashboard.js"></script>
     <script src="/static/js/charts.js"></script>
+    <script src="/static/js/terminal.js"></script>
+    <script src="/static/js/network-viz.js"></script>
+    <script src="/static/js/alerts.js"></script>
 
     <!-- Close modals on background click -->
     <script>

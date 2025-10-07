@@ -1,0 +1,49 @@
+# Environment files with secrets
+.env.gitea
+.env*.local
+
+# Terraform
+terraform/.terraform/
+terraform/**/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/**/.terraform.lock.hcl
+terraform/**/terraform.tfvars
+
+# Docker volumes and data
+data/
+backups/
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+
+# Credentials and secrets
+credentials.json
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+
+# Temporary files
+*.tmp
+*.bak
+*.log

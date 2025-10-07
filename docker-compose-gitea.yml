@@ -2,6 +2,13 @@ version: '3.8'
 
 # Containerized Gitea + PostgreSQL + Actions Runner
 # This is the foundation service for the entire DevSecOps platform
+#
+# Configuration:
+# - Copy .env.gitea.template to .env.gitea and customize
+# - Or create .env.gitea with your credentials
+
+env_file:
+  - .env.gitea
 
 networks:
   gitea_default:
@@ -167,6 +174,7 @@ services:
       - gitea_config:/etc/gitea
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
+      - ./scripts/init-gitea-admin.sh:/usr/local/bin/init-gitea-admin.sh:ro
 
     ports:
       - "${GITEA_HTTP_PORT:-10000}:10000"
