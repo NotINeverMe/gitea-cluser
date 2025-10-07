@@ -1,0 +1,631 @@
+{
+  "name": "SBOM Management",
+  "nodes": [
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "bucketName": "compliance-evidence-ssdf",
+        "fileName": "={{ $json.name }}",
+        "options": {
+          "getMetadata": true
+        }
+      },
+      "id": "gcs-trigger",
+      "name": "GCS SBOM Upload Event",
+      "type": "n8n-nodes-base.googleCloudStorage",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "gcs-sbom-notification",
+      "credentials": {
+        "googleCloudStorageOAuth2Api": {
+          "id": "gcs-oauth",
+          "name": "GCS OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const sbomData = $input.item.json;\nconst fileName = sbomData.name;\nconst content = JSON.parse(Buffer.from(sbomData.data, 'base64').toString('utf-8'));\n\n// Detect SBOM format\nlet format = 'unknown';\nlet components = [];\nlet licenses = [];\nlet dependencies = [];\n\nif (content.spdxVersion) {\n  // SPDX format\n  format = 'spdx';\n  components = content.packages || [];\n  licenses = [...new Set(components.map(p => p.licenseConcluded).filter(l => l))];\n  dependencies = content.relationships || [];\n} else if (content.bomFormat === 'CycloneDX') {\n  // CycloneDX format\n  format = 'cyclonedx';\n  components = content.components || [];\n  licenses = [...new Set(components.flatMap(c => c.licenses?.map(l => l.license?.id || l.license?.name) || []).filter(l => l))];\n  dependencies = content.dependencies || [];\n} else if (content.artifacts) {\n  // Syft JSON format\n  format = 'syft';\n  components = content.artifacts || [];\n  licenses = [...new Set(components.flatMap(a => a.licenses || []).filter(l => l))];\n  dependencies = content.relationships || [];\n}\n\nconst parsedSbom = {\n  format: format,\n  version: content.spdxVersion || content.specVersion || content.schema?.version || 'unknown',\n  creationTime: content.creationInfo?.created || content.metadata?.timestamp || new Date().toISOString(),\n  toolName: content.creationInfo?.creators?.[0] || content.metadata?.tools?.[0]?.name || 'unknown',\n  components: components.map(c => ({\n    name: c.name || c.metadata?.name || 'unknown',\n    version: c.versionInfo || c.version || 'unknown',\n    type: c.type || c.metadata?.type || 'library',\n    purl: c.externalRefs?.find(r => r.referenceType === 'purl')?.referenceLocator || c.purl || '',\n    licenses: Array.isArray(c.licenseConcluded) ? c.licenseConcluded : [c.licenseConcluded || 'unknown'],\n    cpe: c.externalRefs?.find(r => r.referenceType === 'cpe23Type')?.referenceLocator || c.cpe || ''\n  })),\n  licenses: licenses,\n  dependencies: dependencies,\n  metadata: sbomData.metadata || {},\n  fileName: fileName,\n  fileHash: require('crypto').createHash('sha256').update(JSON.stringify(content)).digest('hex')\n};\n\nreturn parsedSbom;"
+      },
+      "id": "parse-sbom",
+      "name": "Parse SBOM",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 10,
+        "options": {}
+      },
+      "id": "split-components",
+      "name": "Split Components for Checking",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.osv.dev/v1/query",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "package",
+              "value": "={{ $json.purl || $json.name + '@' + $json.version }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000,
+          "batching": {
+            "batch": {
+              "batchSize": 5
+            }
+          }
+        }
+      },
+      "id": "osv-check",
+      "name": "Query OSV Database",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 200],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/advisories",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "ecosystem",
+              "value": "={{ $json.type }}"
+            },
+            {
+              "name": "affects",
+              "value": "={{ $json.name }}@{{ $json.version }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "github-advisory",
+      "name": "Query GitHub Advisory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "=https://services.nvd.nist.gov/rest/json/cves/2.0",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "cpeMatchString",
+              "value": "={{ $json.cpe }}"
+            },
+            {
+              "name": "resultsPerPage",
+              "value": "10"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "nvd-check",
+      "name": "Query NVD",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 400],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const parsedSbom = $('Parse SBOM').item.json;\nconst osvResults = $('Query OSV Database').all();\nconst githubResults = $('Query GitHub Advisory').all();\nconst nvdResults = $('Query NVD').all();\n\n// Aggregate vulnerabilities\nconst vulnerabilities = [];\n\n// Process OSV results\nosvResults.forEach(result => {\n  if (result.json?.vulns) {\n    result.json.vulns.forEach(vuln => {\n      vulnerabilities.push({\n        source: 'OSV',\n        id: vuln.id,\n        summary: vuln.summary,\n        severity: vuln.database_specific?.severity || 'unknown',\n        cvss: vuln.database_specific?.cvss_score || 0,\n        affected_component: result.json.package,\n        published: vuln.published,\n        modified: vuln.modified\n      });\n    });\n  }\n});\n\n// Process GitHub Advisory results\ngithubResults.forEach(result => {\n  if (result.json && Array.isArray(result.json)) {\n    result.json.forEach(advisory => {\n      vulnerabilities.push({\n        source: 'GitHub Advisory',\n        id: advisory.ghsa_id,\n        summary: advisory.summary,\n        severity: advisory.severity,\n        cvss: advisory.cvss?.score || 0,\n        affected_component: advisory.vulnerabilities?.[0]?.package?.name,\n        published: advisory.published_at,\n        modified: advisory.updated_at\n      });\n    });\n  }\n});\n\n// Process NVD results\nnvdResults.forEach(result => {\n  if (result.json?.vulnerabilities) {\n    result.json.vulnerabilities.forEach(item => {\n      const cve = item.cve;\n      vulnerabilities.push({\n        source: 'NVD',\n        id: cve.id,\n        summary: cve.descriptions?.[0]?.value || '',\n        severity: cve.metrics?.cvssMetricV31?.[0]?.cvssData?.baseSeverity || 'unknown',\n        cvss: cve.metrics?.cvssMetricV31?.[0]?.cvssData?.baseScore || 0,\n        affected_component: cve.configurations?.[0]?.nodes?.[0]?.cpeMatch?.[0]?.criteria || '',\n        published: cve.published,\n        modified: cve.lastModified\n      });\n    });\n  }\n});\n\n// Deduplicate vulnerabilities by ID\nconst uniqueVulns = {};\nvulnerabilities.forEach(vuln => {\n  if (!uniqueVulns[vuln.id] || vuln.cvss > uniqueVulns[vuln.id].cvss) {\n    uniqueVulns[vuln.id] = vuln;\n  }\n});\n\nconst finalVulnerabilities = Object.values(uniqueVulns);\n\n// Categorize by severity\nconst critical = finalVulnerabilities.filter(v => v.severity === 'CRITICAL' || v.cvss >= 9.0);\nconst high = finalVulnerabilities.filter(v => v.severity === 'HIGH' || (v.cvss >= 7.0 && v.cvss < 9.0));\nconst medium = finalVulnerabilities.filter(v => v.severity === 'MEDIUM' || (v.cvss >= 4.0 && v.cvss < 7.0));\nconst low = finalVulnerabilities.filter(v => v.severity === 'LOW' || (v.cvss >= 0.1 && v.cvss < 4.0));\n\nreturn {\n  sbomId: parsedSbom.fileHash,\n  totalVulnerabilities: finalVulnerabilities.length,\n  critical: critical,\n  high: high,\n  medium: medium,\n  low: low,\n  allVulnerabilities: finalVulnerabilities,\n  scanTimestamp: new Date().toISOString(),\n  sbomMetadata: parsedSbom\n};"
+      },
+      "id": "aggregate-vulns",
+      "name": "Aggregate Vulnerabilities",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const parsedSbom = $('Parse SBOM').item.json;\n\nconst allowedLicenses = ['MIT', 'Apache-2.0', 'Apache 2.0', 'BSD-3-Clause', 'BSD-2-Clause', 'ISC', 'CC0-1.0', 'Unlicense'];\nconst blockedLicenses = ['GPL', 'GPL-2.0', 'GPL-3.0', 'AGPL', 'AGPL-3.0', 'LGPL', 'LGPL-2.1', 'LGPL-3.0'];\n\nconst licenseViolations = [];\nconst licenseWarnings = [];\nconst licenseDistribution = {};\n\nparsedSbom.components.forEach(component => {\n  const licenses = component.licenses || [];\n  \n  licenses.forEach(license => {\n    // Track distribution\n    licenseDistribution[license] = (licenseDistribution[license] || 0) + 1;\n    \n    // Check for violations\n    if (blockedLicenses.some(blocked => license.includes(blocked))) {\n      licenseViolations.push({\n        component: component.name,\n        version: component.version,\n        license: license,\n        severity: 'HIGH',\n        action: 'REMOVE_OR_REPLACE'\n      });\n    } else if (!allowedLicenses.some(allowed => license.includes(allowed)) && license !== 'unknown') {\n      licenseWarnings.push({\n        component: component.name,\n        version: component.version,\n        license: license,\n        severity: 'MEDIUM',\n        action: 'REVIEW_REQUIRED'\n      });\n    }\n  });\n});\n\nreturn {\n  totalComponents: parsedSbom.components.length,\n  licenseDistribution: licenseDistribution,\n  violations: licenseViolations,\n  warnings: licenseWarnings,\n  complianceStatus: licenseViolations.length === 0 ? 'COMPLIANT' : 'NON_COMPLIANT',\n  checkTimestamp: new Date().toISOString(),\n  allowedLicenses: allowedLicenses,\n  blockedLicenses: blockedLicenses\n};"
+      },
+      "id": "license-check",
+      "name": "License Compliance Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO sbom_components (sbom_id, name, version, type, purl, licenses, cpe, last_seen, metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8) ON CONFLICT (sbom_id, name, version) DO UPDATE SET last_seen = NOW(), metadata = $8",
+        "additionalFields": {
+          "mode": "multiple",
+          "queryBatching": "transaction",
+          "queryParams": "={{ $json.components.map(c => [c.sbomId, c.name, c.version, c.type, c.purl, JSON.stringify(c.licenses), c.cpe, JSON.stringify(c)]) }}"
+        }
+      },
+      "id": "store-components",
+      "name": "Store Components in DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [850, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT name, version, MAX(last_seen) as last_seen, EXTRACT(DAY FROM NOW() - MAX(last_seen)) as days_old FROM sbom_components WHERE EXTRACT(DAY FROM NOW() - MAX(last_seen)) > 90 GROUP BY name, version HAVING COUNT(*) > 0 ORDER BY days_old DESC LIMIT 20"
+      },
+      "id": "check-outdated",
+      "name": "Check Outdated Dependencies",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [650, 600],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const vulnerabilities = $('Aggregate Vulnerabilities').item.json;\nconst licenseCheck = $('License Compliance Check').item.json;\nconst outdated = $('Check Outdated Dependencies').all().map(i => i.json);\nconst parsedSbom = $('Parse SBOM').item.json;\n\nconst alerts = [];\n\n// Vulnerability alerts\nif (vulnerabilities.critical.length > 0) {\n  alerts.push({\n    type: 'CRITICAL_VULNERABILITY',\n    severity: 'CRITICAL',\n    title: `${vulnerabilities.critical.length} Critical Vulnerabilities Found`,\n    description: `Critical vulnerabilities detected in SBOM: ${vulnerabilities.critical.map(v => v.id).join(', ')}`,\n    vulnerabilities: vulnerabilities.critical,\n    action: 'IMMEDIATE_ACTION_REQUIRED'\n  });\n}\n\nif (vulnerabilities.high.length > 0) {\n  alerts.push({\n    type: 'HIGH_VULNERABILITY',\n    severity: 'HIGH',\n    title: `${vulnerabilities.high.length} High Severity Vulnerabilities Found`,\n    description: `High severity vulnerabilities detected: ${vulnerabilities.high.map(v => v.id).join(', ')}`,\n    vulnerabilities: vulnerabilities.high,\n    action: 'ACTION_REQUIRED'\n  });\n}\n\n// License alerts\nif (licenseCheck.violations.length > 0) {\n  alerts.push({\n    type: 'LICENSE_VIOLATION',\n    severity: 'HIGH',\n    title: `${licenseCheck.violations.length} License Violations Found`,\n    description: `Blocked licenses detected in components`,\n    violations: licenseCheck.violations,\n    action: 'REMOVE_OR_REPLACE_COMPONENTS'\n  });\n}\n\nif (licenseCheck.warnings.length > 0) {\n  alerts.push({\n    type: 'LICENSE_WARNING',\n    severity: 'MEDIUM',\n    title: `${licenseCheck.warnings.length} License Warnings`,\n    description: `Unknown or potentially problematic licenses detected`,\n    warnings: licenseCheck.warnings,\n    action: 'REVIEW_REQUIRED'\n  });\n}\n\n// Outdated dependency alerts\nif (outdated.length > 0) {\n  alerts.push({\n    type: 'OUTDATED_DEPENDENCIES',\n    severity: 'LOW',\n    title: `${outdated.length} Outdated Dependencies`,\n    description: `Dependencies not updated for over 90 days`,\n    dependencies: outdated,\n    action: 'CONSIDER_UPDATING'\n  });\n}\n\nreturn {\n  alerts: alerts,\n  summary: {\n    totalAlerts: alerts.length,\n    criticalCount: alerts.filter(a => a.severity === 'CRITICAL').length,\n    highCount: alerts.filter(a => a.severity === 'HIGH').length,\n    mediumCount: alerts.filter(a => a.severity === 'MEDIUM').length,\n    lowCount: alerts.filter(a => a.severity === 'LOW').length\n  },\n  sbomId: parsedSbom.fileHash,\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "generate-alerts",
+      "name": "Generate Alerts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.alerts.filter(a => a.severity === 'CRITICAL').length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "critical-check",
+      "name": "Check for Critical Issues",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "requestMethod": "POST",
+        "url": "http://gitea:3000/api/v1/repos/{{ $json.sbomMetadata.metadata.repository }}/issues",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "=[SECURITY] {{ $json.vulnerability.id }} - {{ $json.vulnerability.summary.substring(0, 50) }}"
+            },
+            {
+              "name": "body",
+              "value": "=## Security Vulnerability Detected\n\n**CVE ID:** {{ $json.vulnerability.id }}\n**Severity:** {{ $json.vulnerability.severity }}\n**CVSS Score:** {{ $json.vulnerability.cvss }}\n**Component:** {{ $json.vulnerability.affected_component }}\n\n### Summary\n{{ $json.vulnerability.summary }}\n\n### Recommended Actions\n1. Update the affected component to the latest patched version\n2. Review the vulnerability details at: https://nvd.nist.gov/vuln/detail/{{ $json.vulnerability.id }}\n3. Test the update in a staging environment\n4. Deploy the fix within the SLA timeframe\n\n### Evidence Package\nSBOM ID: {{ $json.sbomId }}\nScan Timestamp: {{ $json.scanTimestamp }}\n\n### SLA\nThis CRITICAL vulnerability must be addressed within 24 hours.\n\n---\n*This issue was automatically created by the SBOM Management workflow*"
+            },
+            {
+              "name": "labels",
+              "value": "[\"security\", \"{{ $json.vulnerability.severity.toLowerCase() }}\", \"cve\"]"
+            }
+          ]
+        }
+      },
+      "id": "create-issue",
+      "name": "Create Gitea Issue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1650, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gitea-api-key",
+          "name": "Gitea API Key"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO sbom_registry (sbom_id, file_name, format, component_count, vulnerability_summary, license_summary, created_at, metadata) VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7) ON CONFLICT (sbom_id) DO UPDATE SET updated_at = NOW(), vulnerability_summary = $5, license_summary = $6",
+        "additionalFields": {
+          "queryParams": "={{ $json.sbomId }},{{ $json.sbomMetadata.fileName }},{{ $json.sbomMetadata.format }},{{ $json.sbomMetadata.components.length }},{{ JSON.stringify($json.vulnerabilitySummary) }},{{ JSON.stringify($json.licenseSummary) }},{{ JSON.stringify($json) }}"
+        }
+      },
+      "id": "update-dashboard",
+      "name": "Update Dashboard Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1450, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "content": "SBOM Analysis Complete",
+        "additionalFields": {
+          "cards": [
+            {
+              "header": {
+                "title": "SBOM Management Report",
+                "subtitle": "={{ $json.sbomMetadata.fileName }}",
+                "imageUrl": "https://fonts.gstatic.com/s/i/short-term/release/googlesymbols/inventory_2/default/48px.svg"
+              },
+              "sections": [
+                {
+                  "header": "Component Summary",
+                  "widgets": [
+                    {
+                      "keyValue": {
+                        "topLabel": "Total Components",
+                        "content": "={{ $json.sbomMetadata.components.length }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Format",
+                        "content": "={{ $json.sbomMetadata.format.toUpperCase() }}"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "header": "Vulnerability Summary",
+                  "widgets": [
+                    {
+                      "keyValue": {
+                        "topLabel": "Critical",
+                        "content": "={{ $json.vulnerabilities.critical.length }}",
+                        "bottomLabel": "24h SLA",
+                        "icon": "={{ $json.vulnerabilities.critical.length > 0 ? 'ERROR' : 'STAR' }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "High",
+                        "content": "={{ $json.vulnerabilities.high.length }}",
+                        "bottomLabel": "72h SLA"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Medium",
+                        "content": "={{ $json.vulnerabilities.medium.length }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Low",
+                        "content": "={{ $json.vulnerabilities.low.length }}"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "header": "License Compliance",
+                  "widgets": [
+                    {
+                      "keyValue": {
+                        "topLabel": "Status",
+                        "content": "={{ $json.licenseCheck.complianceStatus }}",
+                        "icon": "={{ $json.licenseCheck.complianceStatus === 'COMPLIANT' ? 'STAR' : 'ERROR' }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Violations",
+                        "content": "={{ $json.licenseCheck.violations.length }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Warnings",
+                        "content": "={{ $json.licenseCheck.warnings.length }}"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "widgets": [
+                    {
+                      "buttons": [
+                        {
+                          "textButton": {
+                            "text": "View Issues",
+                            "onClick": {
+                              "openLink": {
+                                "url": "=http://gitea:3000/{{ $json.sbomMetadata.metadata.repository }}/issues?labels=security"
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "textButton": {
+                            "text": "View Dashboard",
+                            "onClick": {
+                              "openLink": {
+                                "url": "http://localhost:8080/dashboard/sbom"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "threadKey": "sbom-management"
+        }
+      },
+      "id": "send-notification",
+      "name": "Send Google Chat Notification",
+      "type": "n8n-nodes-base.googleChat",
+      "typeVersion": 1,
+      "position": [1850, 400],
+      "credentials": {
+        "googleChatOAuth2Api": {
+          "id": "gchat-oauth",
+          "name": "Google Chat OAuth2"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "GCS SBOM Upload Event": {
+      "main": [
+        [
+          {
+            "node": "Parse SBOM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse SBOM": {
+      "main": [
+        [
+          {
+            "node": "Split Components for Checking",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "License Compliance Check",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Store Components in DB",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check Outdated Dependencies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Components for Checking": {
+      "main": [
+        [
+          {
+            "node": "Query OSV Database",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Query GitHub Advisory",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Query NVD",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query OSV Database": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Vulnerabilities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query GitHub Advisory": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Vulnerabilities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query NVD": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Vulnerabilities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Vulnerabilities": {
+      "main": [
+        [
+          {
+            "node": "Generate Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "License Compliance Check": {
+      "main": [
+        [
+          {
+            "node": "Generate Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Outdated Dependencies": {
+      "main": [
+        [
+          {
+            "node": "Generate Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Alerts": {
+      "main": [
+        [
+          {
+            "node": "Check for Critical Issues",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Update Dashboard Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Critical Issues": {
+      "main": [
+        [
+          {
+            "node": "Create Gitea Issue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Google Chat Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Gitea Issue": {
+      "main": [
+        [
+          {
+            "node": "Send Google Chat Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Dashboard Data": {
+      "main": [
+        [
+          {
+            "node": "Send Google Chat Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "error-handler-workflow"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "SBOM",
+      "id": "sbom"
+    },
+    {
+      "name": "Vulnerability Management",
+      "id": "vuln-mgmt"
+    },
+    {
+      "name": "License Compliance",
+      "id": "license"
+    },
+    {
+      "name": "SSDF",
+      "id": "ssdf-compliance"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-01-07T10:00:00.000Z",
+  "id": "sbom-management",
+  "meta": {
+    "instanceId": "n8n-instance"
+  },
+  "versionId": "1.0.0",
+  "description": "Manages SBOM files uploaded to GCS. Parses SPDX/CycloneDX/Syft formats, checks for vulnerabilities using OSV/GitHub Advisory/NVD, validates license compliance, tracks outdated dependencies, creates Gitea issues for critical findings, and updates dashboard metrics."
+}

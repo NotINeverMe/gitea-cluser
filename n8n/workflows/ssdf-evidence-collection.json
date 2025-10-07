@@ -1,0 +1,766 @@
+{
+  "name": "SSDF Evidence Collection",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ssdf-evidence-collection",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "webhook-trigger",
+      "name": "Gitea Workflow Completion",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "gitea-workflow-complete"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $input.item.json;\nconst buildMetadata = {\n  repository: payload.repository?.full_name || '',\n  commitSha: payload.head_commit?.id || '',\n  branch: payload.ref?.replace('refs/heads/', '') || '',\n  timestamp: new Date().toISOString(),\n  workflowName: payload.workflow?.name || '',\n  runId: payload.workflow_run?.id || '',\n  actor: payload.sender?.login || ''\n};\n\nreturn {\n  metadata: buildMetadata,\n  original: payload\n};"
+      },
+      "id": "extract-metadata",
+      "name": "Extract Build Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "=http://sonarqube:9000/api/qualitygates/project_status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "projectKey",
+              "value": "={{ $('Extract Build Metadata').item.json.metadata.repository }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "sonarqube-report",
+      "name": "Fetch SonarQube Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [650, 200],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "sonarqube-creds",
+          "name": "SonarQube Credentials"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "=http://trivy:8080/api/v1/scan/{{ $('Extract Build Metadata').item.json.metadata.repository }}/{{ $('Extract Build Metadata').item.json.metadata.commitSha }}",
+        "authentication": "none",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "trivy-results",
+      "name": "Fetch Trivy CVE Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [650, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "=http://gitea:3000/api/v1/repos/{{ $('Extract Build Metadata').item.json.metadata.repository }}/contents/sbom.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "ref",
+              "value": "={{ $('Extract Build Metadata').item.json.metadata.commitSha }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "syft-sbom",
+      "name": "Fetch Syft SBOM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [650, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gitea-api-key",
+          "name": "Gitea API Key"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "=http://cosign-server:8080/api/v1/signatures/{{ $('Extract Build Metadata').item.json.metadata.repository }}/{{ $('Extract Build Metadata').item.json.metadata.commitSha }}",
+        "authentication": "none",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "cosign-signatures",
+      "name": "Fetch Cosign Signatures",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [650, 500],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "=http://checkov:8080/api/v1/scan/{{ $('Extract Build Metadata').item.json.metadata.repository }}/{{ $('Extract Build Metadata').item.json.metadata.commitSha }}",
+        "authentication": "none",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "checkov-policy",
+      "name": "Fetch Checkov Policy Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [650, 600],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst evidenceFiles = {\n  sonarqube: $('Fetch SonarQube Report').item.json,\n  trivy: $('Fetch Trivy CVE Results').item.json,\n  syft: $('Fetch Syft SBOM').item.json,\n  cosign: $('Fetch Cosign Signatures').item.json,\n  checkov: $('Fetch Checkov Policy Results').item.json\n};\n\nconst hashes = {};\nfor (const [tool, content] of Object.entries(evidenceFiles)) {\n  const hash = crypto.createHash('sha256');\n  hash.update(JSON.stringify(content));\n  hashes[tool] = hash.digest('hex');\n}\n\nreturn {\n  files: evidenceFiles,\n  hashes: hashes,\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "hash-evidence",
+      "name": "Hash Evidence Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const metadata = $('Extract Build Metadata').item.json.metadata;\nconst evidence = $('Hash Evidence Files').item.json;\n\nconst manifest = {\n  version: '1.0.0',\n  evidenceId: `${metadata.repository}-${metadata.commitSha}-${Date.now()}`,\n  repository: metadata.repository,\n  commitSha: metadata.commitSha,\n  branch: metadata.branch,\n  timestamp: metadata.timestamp,\n  workflowName: metadata.workflowName,\n  actor: metadata.actor,\n  tools: {\n    sonarqube: {\n      status: $('Fetch SonarQube Report').item.error ? 'failed' : 'success',\n      hash: evidence.hashes.sonarqube\n    },\n    trivy: {\n      status: $('Fetch Trivy CVE Results').item.error ? 'failed' : 'success',\n      hash: evidence.hashes.trivy\n    },\n    syft: {\n      status: $('Fetch Syft SBOM').item.error ? 'failed' : 'success',\n      hash: evidence.hashes.syft\n    },\n    cosign: {\n      status: $('Fetch Cosign Signatures').item.error ? 'failed' : 'success',\n      hash: evidence.hashes.cosign\n    },\n    checkov: {\n      status: $('Fetch Checkov Policy Results').item.error ? 'failed' : 'success',\n      hash: evidence.hashes.checkov\n    }\n  },\n  ssdfPractices: [\n    'PS.1.1', // Identify and document all components\n    'PS.2.1', // Configure security checks\n    'PS.3.1', // Verify third-party components\n    'PW.1.1', // Design secure software\n    'PW.4.1', // Check code for vulnerabilities\n    'PW.5.1', // Configure build process\n    'PW.6.1', // Archive and protect build artifacts\n    'PW.7.1', // Analyze vulnerabilities\n    'PW.8.1', // Generate SBOM\n    'RV.1.1', // Identify and confirm vulnerabilities\n    'RV.1.2'  // Assess vulnerabilities\n  ],\n  evidenceFiles: evidence.files,\n  hashes: evidence.hashes,\n  collectionTimestamp: evidence.timestamp\n};\n\nreturn manifest;"
+      },
+      "id": "create-manifest",
+      "name": "Create Evidence Manifest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const manifest = $('Create Evidence Manifest').item.json;\nconst tar = require('tar');\nconst zlib = require('zlib');\nconst fs = require('fs');\nconst path = require('path');\n\nconst tempDir = `/tmp/evidence-${manifest.evidenceId}`;\nfs.mkdirSync(tempDir, { recursive: true });\n\n// Write manifest\nfs.writeFileSync(\n  path.join(tempDir, 'manifest.json'),\n  JSON.stringify(manifest, null, 2)\n);\n\n// Write evidence files\nfor (const [tool, content] of Object.entries(manifest.evidenceFiles)) {\n  fs.writeFileSync(\n    path.join(tempDir, `${tool}.json`),\n    JSON.stringify(content, null, 2)\n  );\n}\n\n// Create tarball\nconst outputPath = `/tmp/${manifest.evidenceId}.tar.gz`;\nawait tar.c(\n  {\n    gzip: true,\n    file: outputPath,\n    cwd: '/tmp'\n  },\n  [`evidence-${manifest.evidenceId}`]\n);\n\n// Read tarball\nconst tarballContent = fs.readFileSync(outputPath);\nconst tarballBase64 = tarballContent.toString('base64');\n\n// Cleanup\nfs.rmSync(tempDir, { recursive: true });\nfs.unlinkSync(outputPath);\n\nreturn {\n  evidenceId: manifest.evidenceId,\n  filename: `${manifest.evidenceId}.tar.gz`,\n  content: tarballBase64,\n  manifest: manifest\n};"
+      },
+      "id": "package-evidence",
+      "name": "Package Evidence",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 400]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "bucketName": "compliance-evidence-ssdf",
+        "fileName": "={{ $('Package Evidence').item.json.manifest.repository }}/{{ $now.format('yyyy-MM-dd') }}/{{ $('Package Evidence').item.json.manifest.commitSha }}/{{ $('Package Evidence').item.json.filename }}",
+        "binaryData": false,
+        "fileContent": "={{ $('Package Evidence').item.json.content }}",
+        "options": {
+          "contentType": "application/gzip",
+          "metadata": {
+            "repository": "={{ $('Package Evidence').item.json.manifest.repository }}",
+            "commitSha": "={{ $('Package Evidence').item.json.manifest.commitSha }}",
+            "evidenceId": "={{ $('Package Evidence').item.json.evidenceId }}",
+            "timestamp": "={{ $('Package Evidence').item.json.manifest.timestamp }}"
+          }
+        }
+      },
+      "id": "upload-gcs",
+      "name": "Upload to GCS",
+      "type": "n8n-nodes-base.googleCloudStorage",
+      "typeVersion": 1,
+      "position": [1450, 400],
+      "credentials": {
+        "googleCloudStorageOAuth2Api": {
+          "id": "gcs-oauth",
+          "name": "GCS OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO evidence_registry (evidence_id, repository, commit_sha, branch, timestamp, workflow_name, actor, ssdf_practices, evidence_path, manifest, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW()) ON CONFLICT (evidence_id) DO UPDATE SET updated_at = NOW()",
+        "additionalFields": {
+          "queryParams": "={{ $('Package Evidence').item.json.evidenceId }},{{ $('Package Evidence').item.json.manifest.repository }},{{ $('Package Evidence').item.json.manifest.commitSha }},{{ $('Package Evidence').item.json.manifest.branch }},{{ $('Package Evidence').item.json.manifest.timestamp }},{{ $('Package Evidence').item.json.manifest.workflowName }},{{ $('Package Evidence').item.json.manifest.actor }},{{ JSON.stringify($('Package Evidence').item.json.manifest.ssdfPractices) }},gs://compliance-evidence-ssdf/{{ $('Package Evidence').item.json.manifest.repository }}/{{ $now.format('yyyy-MM-dd') }}/{{ $('Package Evidence').item.json.manifest.commitSha }}/{{ $('Package Evidence').item.json.filename }},{{ JSON.stringify($('Package Evidence').item.json.manifest) }}"
+        }
+      },
+      "id": "update-registry",
+      "name": "Update Evidence Registry",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1650, 400],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "content": "SSDF Evidence Collection Complete",
+        "additionalFields": {
+          "cards": [
+            {
+              "header": {
+                "title": "SSDF Evidence Package Created",
+                "subtitle": "={{ $('Package Evidence').item.json.manifest.repository }}",
+                "imageUrl": "https://fonts.gstatic.com/s/i/short-term/release/googlesymbols/check_circle/default/48px.svg"
+              },
+              "sections": [
+                {
+                  "widgets": [
+                    {
+                      "keyValue": {
+                        "topLabel": "Evidence ID",
+                        "content": "={{ $('Package Evidence').item.json.evidenceId }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Repository",
+                        "content": "={{ $('Package Evidence').item.json.manifest.repository }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Commit SHA",
+                        "content": "={{ $('Package Evidence').item.json.manifest.commitSha.substring(0, 8) }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "SSDF Practices Covered",
+                        "content": "={{ $('Package Evidence').item.json.manifest.ssdfPractices.length }} practices"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "header": "Evidence Collection Status",
+                  "widgets": [
+                    {
+                      "keyValue": {
+                        "topLabel": "SonarQube",
+                        "content": "={{ $('Package Evidence').item.json.manifest.tools.sonarqube.status }}",
+                        "icon": "={{ $('Package Evidence').item.json.manifest.tools.sonarqube.status === 'success' ? 'STAR' : 'ERROR' }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Trivy",
+                        "content": "={{ $('Package Evidence').item.json.manifest.tools.trivy.status }}",
+                        "icon": "={{ $('Package Evidence').item.json.manifest.tools.trivy.status === 'success' ? 'STAR' : 'ERROR' }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "SBOM (Syft)",
+                        "content": "={{ $('Package Evidence').item.json.manifest.tools.syft.status }}",
+                        "icon": "={{ $('Package Evidence').item.json.manifest.tools.syft.status === 'success' ? 'STAR' : 'ERROR' }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Signatures (Cosign)",
+                        "content": "={{ $('Package Evidence').item.json.manifest.tools.cosign.status }}",
+                        "icon": "={{ $('Package Evidence').item.json.manifest.tools.cosign.status === 'success' ? 'STAR' : 'ERROR' }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Policy (Checkov)",
+                        "content": "={{ $('Package Evidence').item.json.manifest.tools.checkov.status }}",
+                        "icon": "={{ $('Package Evidence').item.json.manifest.tools.checkov.status === 'success' ? 'STAR' : 'ERROR' }}"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "widgets": [
+                    {
+                      "buttons": [
+                        {
+                          "textButton": {
+                            "text": "View in GCS",
+                            "onClick": {
+                              "openLink": {
+                                "url": "=https://console.cloud.google.com/storage/browser/compliance-evidence-ssdf/{{ $('Package Evidence').item.json.manifest.repository }}/{{ $now.format('yyyy-MM-dd') }}/{{ $('Package Evidence').item.json.manifest.commitSha }}"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "threadKey": "ssdf-evidence"
+        }
+      },
+      "id": "google-chat",
+      "name": "Send Google Chat Confirmation",
+      "type": "n8n-nodes-base.googleChat",
+      "typeVersion": 1,
+      "position": [1850, 400],
+      "credentials": {
+        "googleChatOAuth2Api": {
+          "id": "gchat-oauth",
+          "name": "Google Chat OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "status",
+              "value": "success"
+            },
+            {
+              "name": "evidenceId",
+              "value": "={{ $('Package Evidence').item.json.evidenceId }}"
+            },
+            {
+              "name": "gcsPath",
+              "value": "=gs://compliance-evidence-ssdf/{{ $('Package Evidence').item.json.manifest.repository }}/{{ $now.format('yyyy-MM-dd') }}/{{ $('Package Evidence').item.json.manifest.commitSha }}/{{ $('Package Evidence').item.json.filename }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [2050, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2250, 400]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $execution.error }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notEmpty"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        }
+      },
+      "id": "error-check",
+      "name": "Check for Errors",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1050, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const error = $execution.error || 'Unknown error occurred';\nconst errorDetails = {\n  message: error.message || error,\n  node: error.node || 'unknown',\n  timestamp: new Date().toISOString(),\n  workflowId: $execution.id,\n  metadata: $('Extract Build Metadata').item?.json?.metadata || {}\n};\n\nreturn errorDetails;"
+      },
+      "id": "error-handler",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 700]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "content": "Error in SSDF Evidence Collection",
+        "additionalFields": {
+          "cards": [
+            {
+              "header": {
+                "title": "SSDF Evidence Collection Failed",
+                "subtitle": "Error occurred during evidence collection",
+                "imageUrl": "https://fonts.gstatic.com/s/i/short-term/release/googlesymbols/error/default/48px.svg"
+              },
+              "sections": [
+                {
+                  "widgets": [
+                    {
+                      "keyValue": {
+                        "topLabel": "Error Message",
+                        "content": "={{ $('Format Error').item.json.message }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Failed Node",
+                        "content": "={{ $('Format Error').item.json.node }}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Workflow ID",
+                        "content": "={{ $('Format Error').item.json.workflowId }}"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "threadKey": "ssdf-errors"
+        }
+      },
+      "id": "error-notification",
+      "name": "Send Error Notification",
+      "type": "n8n-nodes-base.googleChat",
+      "typeVersion": 1,
+      "position": [1450, 700],
+      "credentials": {
+        "googleChatOAuth2Api": {
+          "id": "gchat-oauth",
+          "name": "Google Chat OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 3,
+        "unit": "seconds"
+      },
+      "id": "wait-retry",
+      "name": "Wait Before Retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [850, 700]
+    },
+    {
+      "parameters": {
+        "maxTries": 3
+      },
+      "id": "retry-logic",
+      "name": "Retry Logic",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [650, 700]
+    }
+  ],
+  "connections": {
+    "Gitea Workflow Completion": {
+      "main": [
+        [
+          {
+            "node": "Extract Build Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Build Metadata": {
+      "main": [
+        [
+          {
+            "node": "Fetch SonarQube Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Trivy CVE Results",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Syft SBOM",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Cosign Signatures",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Checkov Policy Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch SonarQube Report": {
+      "main": [
+        [
+          {
+            "node": "Hash Evidence Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Trivy CVE Results": {
+      "main": [
+        [
+          {
+            "node": "Hash Evidence Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Syft SBOM": {
+      "main": [
+        [
+          {
+            "node": "Hash Evidence Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Cosign Signatures": {
+      "main": [
+        [
+          {
+            "node": "Hash Evidence Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Checkov Policy Results": {
+      "main": [
+        [
+          {
+            "node": "Hash Evidence Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hash Evidence Files": {
+      "main": [
+        [
+          {
+            "node": "Create Evidence Manifest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Evidence Manifest": {
+      "main": [
+        [
+          {
+            "node": "Package Evidence",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check for Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Package Evidence": {
+      "main": [
+        [
+          {
+            "node": "Upload to GCS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to GCS": {
+      "main": [
+        [
+          {
+            "node": "Update Evidence Registry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Evidence Registry": {
+      "main": [
+        [
+          {
+            "node": "Send Google Chat Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Google Chat Confirmation": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Errors": {
+      "main": [
+        [
+          {
+            "node": "Format Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Format Error": {
+      "main": [
+        [
+          {
+            "node": "Send Error Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Error Notification": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Retry": {
+      "main": [
+        [
+          {
+            "node": "Retry Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry Logic": {
+      "main": [
+        [
+          {
+            "node": "Extract Build Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "error-handler-workflow"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "SSDF",
+      "id": "ssdf-compliance"
+    },
+    {
+      "name": "Evidence Collection",
+      "id": "evidence"
+    },
+    {
+      "name": "Compliance",
+      "id": "compliance"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-01-07T10:00:00.000Z",
+  "id": "ssdf-evidence-collection",
+  "meta": {
+    "instanceId": "n8n-instance"
+  },
+  "versionId": "1.0.0",
+  "description": "Automatically collects SSDF compliance evidence from multiple security tools when Gitea Actions workflow completes. Packages evidence, calculates hashes, creates manifest, uploads to GCS, and updates PostgreSQL registry. Covers SSDF practices PS.1.1, PS.2.1, PS.3.1, PW.1.1, PW.4.1, PW.5.1, PW.6.1, PW.7.1, PW.8.1, RV.1.1, RV.1.2."
+}

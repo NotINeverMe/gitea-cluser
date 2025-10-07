@@ -1,0 +1,476 @@
+name: Comprehensive Security Scanning (SSDF PW.7/RV.1)
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    types: [opened, synchronize]
+  schedule:
+    - cron: '0 3 * * *'  # Daily at 3 AM UTC
+  workflow_dispatch:
+
+env:
+  EVIDENCE_BUCKET: gs://ssdf-evidence-${GITEA_REPO_NAME}
+  SECURITY_REPORT_PATH: security-reports
+
+jobs:
+  container-scan:
+    runs-on: ubuntu-latest
+    outputs:
+      critical_vulns: ${{ steps.aggregate.outputs.critical_total }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Security Scanners
+        run: |
+          echo "::group::Installing security tools"
+          # Install Trivy
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+          # Install Grype
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+          # Install Snyk
+          npm install -g snyk
+
+          # Install Clair scanner
+          curl -LO https://github.com/quay/clair/releases/latest/download/clairctl-linux-amd64
+          chmod +x clairctl-linux-amd64
+          sudo mv clairctl-linux-amd64 /usr/local/bin/clairctl
+          echo "::endgroup::"
+
+      - name: Trivy Container Scan (PW.7.1)
+        id: trivy
+        run: |
+          echo "::group::Trivy Container Vulnerability Scan"
+          mkdir -p ${SECURITY_REPORT_PATH}/container
+
+          # Scan Dockerfile if exists
+          if [ -f Dockerfile ]; then
+            trivy config Dockerfile \
+              --format json \
+              --output ${SECURITY_REPORT_PATH}/container/trivy-dockerfile.json
+
+            # Scan container image if built
+            if [ -n "${REGISTRY}/${IMAGE_NAME}" ]; then
+              trivy image ${REGISTRY}/${IMAGE_NAME}:latest \
+                --format json \
+                --output ${SECURITY_REPORT_PATH}/container/trivy-image.json \
+                --severity CRITICAL,HIGH,MEDIUM,LOW \
+                --exit-code 0
+
+              critical=$(jq '[.Results[].Vulnerabilities[] | select(.Severity == "CRITICAL")] | length' ${SECURITY_REPORT_PATH}/container/trivy-image.json)
+              high=$(jq '[.Results[].Vulnerabilities[] | select(.Severity == "HIGH")] | length' ${SECURITY_REPORT_PATH}/container/trivy-image.json)
+
+              echo "trivy_critical=${critical}" >> $GITHUB_OUTPUT
+              echo "trivy_high=${high}" >> $GITHUB_OUTPUT
+
+              echo "📊 Trivy Results: ${critical} CRITICAL, ${high} HIGH vulnerabilities"
+            fi
+          fi
+          echo "::endgroup::"
+
+      - name: Grype Vulnerability Detection (PW.7.1)
+        id: grype
+        run: |
+          echo "::group::Grype Vulnerability Scan"
+          # Scan current directory
+          grype dir:. \
+            --output json \
+            --file ${SECURITY_REPORT_PATH}/container/grype-results.json \
+            --fail-on critical || true
+
+          critical=$(jq '[.matches[] | select(.vulnerability.severity == "Critical")] | length' ${SECURITY_REPORT_PATH}/container/grype-results.json)
+          high=$(jq '[.matches[] | select(.vulnerability.severity == "High")] | length' ${SECURITY_REPORT_PATH}/container/grype-results.json)
+
+          echo "grype_critical=${critical}" >> $GITHUB_OUTPUT
+          echo "grype_high=${high}" >> $GITHUB_OUTPUT
+
+          echo "📊 Grype Results: ${critical} CRITICAL, ${high} HIGH vulnerabilities"
+          echo "::endgroup::"
+
+      - name: Snyk Container Scan (PW.7.2)
+        id: snyk
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        continue-on-error: true
+        run: |
+          echo "::group::Snyk Security Scan"
+          if [ -n "${SNYK_TOKEN}" ]; then
+            snyk container test ${REGISTRY}/${IMAGE_NAME}:latest \
+              --json-file-output=${SECURITY_REPORT_PATH}/container/snyk-results.json \
+              --severity-threshold=high || true
+
+            vulnerabilities=$(jq '.vulnerabilities | length' ${SECURITY_REPORT_PATH}/container/snyk-results.json)
+            echo "snyk_vulns=${vulnerabilities}" >> $GITHUB_OUTPUT
+
+            echo "📊 Snyk found ${vulnerabilities} vulnerabilities"
+          else
+            echo "⚠️ Snyk token not configured, skipping scan"
+          fi
+          echo "::endgroup::"
+
+      - name: Aggregate Container Results (RV.1.1)
+        id: aggregate
+        run: |
+          echo "::group::Aggregating Container Scan Results"
+          # Sum up critical vulnerabilities from all scanners
+          trivy_crit="${{ steps.trivy.outputs.trivy_critical }}"
+          grype_crit="${{ steps.grype.outputs.grype_critical }}"
+
+          total_critical=$((${trivy_crit:-0} + ${grype_crit:-0}))
+          echo "critical_total=${total_critical}" >> $GITHUB_OUTPUT
+
+          if [ "$total_critical" -gt 0 ]; then
+            echo "❌ Found ${total_critical} total CRITICAL container vulnerabilities"
+          else
+            echo "✅ No critical container vulnerabilities found"
+          fi
+          echo "::endgroup::"
+
+  code-scan:
+    runs-on: ubuntu-latest
+    outputs:
+      sast_critical: ${{ steps.aggregate.outputs.critical_total }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Code Scanners
+        run: |
+          echo "::group::Installing SAST tools"
+          pip3 install bandit semgrep safety
+          npm install -g @bearer/cli eslint jshint
+          echo "::endgroup::"
+
+      - name: Bandit Python Security (PW.7.2)
+        id: bandit
+        if: hashFiles('**/*.py') != ''
+        run: |
+          echo "::group::Bandit Python SAST"
+          mkdir -p ${SECURITY_REPORT_PATH}/sast
+
+          bandit -r . -f json -o ${SECURITY_REPORT_PATH}/sast/bandit-results.json || true
+
+          high_severity=$(jq '[.results[] | select(.issue_severity == "HIGH")] | length' ${SECURITY_REPORT_PATH}/sast/bandit-results.json)
+          medium_severity=$(jq '[.results[] | select(.issue_severity == "MEDIUM")] | length' ${SECURITY_REPORT_PATH}/sast/bandit-results.json)
+
+          echo "bandit_high=${high_severity}" >> $GITHUB_OUTPUT
+          echo "bandit_medium=${medium_severity}" >> $GITHUB_OUTPUT
+
+          echo "📊 Bandit: ${high_severity} HIGH, ${medium_severity} MEDIUM issues"
+          echo "::endgroup::"
+
+      - name: Semgrep Multi-language SAST (PW.7.2)
+        id: semgrep
+        run: |
+          echo "::group::Semgrep SAST Scan"
+          semgrep --config=auto \
+            --json \
+            --output=${SECURITY_REPORT_PATH}/sast/semgrep-results.json \
+            --metrics=off \
+            . || true
+
+          errors=$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' ${SECURITY_REPORT_PATH}/sast/semgrep-results.json)
+          warnings=$(jq '[.results[] | select(.extra.severity == "WARNING")] | length' ${SECURITY_REPORT_PATH}/sast/semgrep-results.json)
+
+          echo "semgrep_errors=${errors}" >> $GITHUB_OUTPUT
+          echo "semgrep_warnings=${warnings}" >> $GITHUB_OUTPUT
+
+          echo "📊 Semgrep: ${errors} ERRORS, ${warnings} WARNINGS"
+          echo "::endgroup::"
+
+      - name: Bearer Security Scan (PW.7.3)
+        id: bearer
+        continue-on-error: true
+        run: |
+          echo "::group::Bearer Security Scan"
+          bearer scan . \
+            --format json \
+            --output ${SECURITY_REPORT_PATH}/sast/bearer-results.json || true
+
+          if [ -f "${SECURITY_REPORT_PATH}/sast/bearer-results.json" ]; then
+            critical=$(jq '[.findings[] | select(.severity == "critical")] | length' ${SECURITY_REPORT_PATH}/sast/bearer-results.json)
+            echo "bearer_critical=${critical}" >> $GITHUB_OUTPUT
+            echo "📊 Bearer: ${critical} CRITICAL findings"
+          fi
+          echo "::endgroup::"
+
+      - name: Aggregate SAST Results (RV.1.1)
+        id: aggregate
+        run: |
+          echo "::group::Aggregating SAST Results"
+          # Calculate total critical issues
+          bandit_high="${{ steps.bandit.outputs.bandit_high }}"
+          semgrep_errors="${{ steps.semgrep.outputs.semgrep_errors }}"
+          bearer_critical="${{ steps.bearer.outputs.bearer_critical }}"
+
+          total_critical=$((${bandit_high:-0} + ${semgrep_errors:-0} + ${bearer_critical:-0}))
+          echo "critical_total=${total_critical}" >> $GITHUB_OUTPUT
+
+          if [ "$total_critical" -gt 0 ]; then
+            echo "❌ Found ${total_critical} critical code security issues"
+          else
+            echo "✅ No critical code security issues found"
+          fi
+          echo "::endgroup::"
+
+  iac-scan:
+    runs-on: ubuntu-latest
+    outputs:
+      iac_failures: ${{ steps.aggregate.outputs.total_failures }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup IaC Scanners
+        run: |
+          echo "::group::Installing IaC security tools"
+          # Install tfsec
+          curl -LO https://github.com/aquasecurity/tfsec/releases/latest/download/tfsec-linux-amd64
+          chmod +x tfsec-linux-amd64
+          sudo mv tfsec-linux-amd64 /usr/local/bin/tfsec
+
+          # Install terrascan
+          curl -L https://github.com/tenable/terrascan/releases/latest/download/terrascan_Linux_x86_64.tar.gz | tar -xz
+          sudo mv terrascan /usr/local/bin/
+
+          # Install checkov
+          pip3 install checkov
+
+          # Install KICS
+          curl -LO https://github.com/Checkmarx/kics/releases/latest/download/kics_linux_amd64.tar.gz
+          tar xzf kics_linux_amd64.tar.gz
+          sudo mv kics /usr/local/bin/
+          echo "::endgroup::"
+
+      - name: tfsec Terraform Security (PW.7.2)
+        id: tfsec
+        if: hashFiles('**/*.tf') != ''
+        run: |
+          echo "::group::tfsec Terraform Scan"
+          mkdir -p ${SECURITY_REPORT_PATH}/iac
+
+          tfsec . \
+            --format json \
+            --out ${SECURITY_REPORT_PATH}/iac/tfsec-results.json \
+            --soft-fail || true
+
+          if [ -f "${SECURITY_REPORT_PATH}/iac/tfsec-results.json" ]; then
+            critical=$(jq '[.results[] | select(.severity == "CRITICAL")] | length' ${SECURITY_REPORT_PATH}/iac/tfsec-results.json)
+            high=$(jq '[.results[] | select(.severity == "HIGH")] | length' ${SECURITY_REPORT_PATH}/iac/tfsec-results.json)
+
+            echo "tfsec_critical=${critical}" >> $GITHUB_OUTPUT
+            echo "tfsec_high=${high}" >> $GITHUB_OUTPUT
+
+            echo "📊 tfsec: ${critical} CRITICAL, ${high} HIGH issues"
+          fi
+          echo "::endgroup::"
+
+      - name: Terrascan Multi-cloud IaC (PW.7.2)
+        id: terrascan
+        run: |
+          echo "::group::Terrascan IaC Scan"
+          terrascan scan \
+            --iac-type all \
+            --output json \
+            --output-file ${SECURITY_REPORT_PATH}/iac/terrascan-results.json || true
+
+          if [ -f "${SECURITY_REPORT_PATH}/iac/terrascan-results.json" ]; then
+            violations=$(jq '.results.violations | length' ${SECURITY_REPORT_PATH}/iac/terrascan-results.json)
+            echo "terrascan_violations=${violations}" >> $GITHUB_OUTPUT
+            echo "📊 Terrascan: ${violations} policy violations"
+          fi
+          echo "::endgroup::"
+
+      - name: Checkov Policy Violations (PW.7.2)
+        id: checkov
+        run: |
+          echo "::group::Checkov IaC Scan"
+          checkov -d . \
+            --framework all \
+            --output json \
+            --output-file-path ${SECURITY_REPORT_PATH}/iac \
+            --soft-fail || true
+
+          if [ -f "${SECURITY_REPORT_PATH}/iac/results_json.json" ]; then
+            failed=$(jq '.summary.failed' ${SECURITY_REPORT_PATH}/iac/results_json.json)
+            passed=$(jq '.summary.passed' ${SECURITY_REPORT_PATH}/iac/results_json.json)
+
+            echo "checkov_failed=${failed}" >> $GITHUB_OUTPUT
+            echo "checkov_passed=${passed}" >> $GITHUB_OUTPUT
+
+            echo "📊 Checkov: ${failed} failed, ${passed} passed checks"
+          fi
+          echo "::endgroup::"
+
+      - name: KICS Infrastructure Scan (PW.7.3)
+        id: kics
+        run: |
+          echo "::group::KICS IaC Scan"
+          kics scan \
+            --path . \
+            --output-path ${SECURITY_REPORT_PATH}/iac \
+            --report-formats json \
+            --output-name kics-results || true
+
+          if [ -f "${SECURITY_REPORT_PATH}/iac/kics-results.json" ]; then
+            high_severity=$(jq '.queries_total.HIGH' ${SECURITY_REPORT_PATH}/iac/kics-results.json)
+            medium_severity=$(jq '.queries_total.MEDIUM' ${SECURITY_REPORT_PATH}/iac/kics-results.json)
+
+            echo "kics_high=${high_severity}" >> $GITHUB_OUTPUT
+            echo "kics_medium=${medium_severity}" >> $GITHUB_OUTPUT
+
+            echo "📊 KICS: ${high_severity} HIGH, ${medium_severity} MEDIUM issues"
+          fi
+          echo "::endgroup::"
+
+      - name: Aggregate IaC Results (RV.1.1)
+        id: aggregate
+        run: |
+          echo "::group::Aggregating IaC Scan Results"
+          tfsec_crit="${{ steps.tfsec.outputs.tfsec_critical }}"
+          terrascan_viol="${{ steps.terrascan.outputs.terrascan_violations }}"
+          checkov_fail="${{ steps.checkov.outputs.checkov_failed }}"
+
+          total_failures=$((${tfsec_crit:-0} + ${terrascan_viol:-0} + ${checkov_fail:-0}))
+          echo "total_failures=${total_failures}" >> $GITHUB_OUTPUT
+
+          if [ "$total_failures" -gt 20 ]; then
+            echo "❌ Too many IaC security issues: ${total_failures}"
+          else
+            echo "✅ IaC security checks passed with ${total_failures} issues"
+          fi
+          echo "::endgroup::"
+
+  generate-report:
+    needs: [container-scan, code-scan, iac-scan]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download scan results
+        uses: actions/download-artifact@v3
+        with:
+          path: scan-artifacts
+
+      - name: Generate Unified Security Report (RV.1.2)
+        run: |
+          echo "::group::Generating Security Report"
+          mkdir -p ${SECURITY_REPORT_PATH}/unified
+
+          # Create unified report
+          cat > ${SECURITY_REPORT_PATH}/unified/security-report.json <<EOF
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "run_id": "${{ github.run_id }}",
+            "commit": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "ssdf_practices": ["PW.7.1", "PW.7.2", "PW.7.3", "RV.1.1", "RV.1.2"],
+            "summary": {
+              "container_vulnerabilities": {
+                "critical": "${{ needs.container-scan.outputs.critical_vulns }}",
+                "status": "${{ needs.container-scan.outputs.critical_vulns == '0' && 'PASS' || 'FAIL' }}"
+              },
+              "code_security": {
+                "critical": "${{ needs.code-scan.outputs.sast_critical }}",
+                "status": "${{ needs.code-scan.outputs.sast_critical == '0' && 'PASS' || 'FAIL' }}"
+              },
+              "infrastructure": {
+                "failures": "${{ needs.iac-scan.outputs.iac_failures }}",
+                "status": "${{ needs.iac-scan.outputs.iac_failures < '20' && 'PASS' || 'FAIL' }}"
+              }
+            },
+            "actions_required": []
+          }
+          EOF
+
+          # Add action items if issues found
+          if [ "${{ needs.container-scan.outputs.critical_vulns }}" -gt 0 ]; then
+            jq '.actions_required += ["Fix critical container vulnerabilities"]' \
+              ${SECURITY_REPORT_PATH}/unified/security-report.json > tmp.json && mv tmp.json ${SECURITY_REPORT_PATH}/unified/security-report.json
+          fi
+
+          if [ "${{ needs.code-scan.outputs.sast_critical }}" -gt 0 ]; then
+            jq '.actions_required += ["Address critical code security issues"]' \
+              ${SECURITY_REPORT_PATH}/unified/security-report.json > tmp.json && mv tmp.json ${SECURITY_REPORT_PATH}/unified/security-report.json
+          fi
+
+          echo "✅ Unified security report generated"
+          echo "::endgroup::"
+
+      - name: Create Gitea Issue if Critical (RV.1.3)
+        if: needs.container-scan.outputs.critical_vulns > 0 || needs.code-scan.outputs.sast_critical > 0
+        run: |
+          echo "::group::Creating Security Issue"
+          cat > issue.md <<EOF
+          # 🚨 Critical Security Issues Detected
+
+          ## Summary
+          The security scan on commit ${{ github.sha }} has detected critical issues that require immediate attention.
+
+          ### Container Security
+          - **Critical Vulnerabilities**: ${{ needs.container-scan.outputs.critical_vulns }}
+
+          ### Code Security
+          - **Critical SAST Findings**: ${{ needs.code-scan.outputs.sast_critical }}
+
+          ### Infrastructure Security
+          - **Policy Failures**: ${{ needs.iac-scan.outputs.iac_failures }}
+
+          ## Required Actions
+          1. Review the detailed security reports in the workflow artifacts
+          2. Fix all critical vulnerabilities before deployment
+          3. Re-run security scans after fixes
+
+          **Workflow Run**: [#${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          **Commit**: ${{ github.sha }}
+          **Branch**: ${{ github.ref_name }}
+
+          ---
+          *This issue was automatically created by the Security Scanning workflow*
+          EOF
+
+          # Create issue via Gitea API
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITEA_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"title\": \"🚨 Critical Security Issues - Run #${{ github.run_id }}\", \"body\": \"$(cat issue.md | jq -Rs .)\"}" \
+            ${{ github.server_url }}/api/v1/repos/${{ github.repository }}/issues
+
+          echo "✅ Security issue created"
+          echo "::endgroup::"
+
+      - name: Upload Evidence to GCS (RV.1.3)
+        if: always()
+        run: |
+          echo "::group::Evidence Collection and Upload"
+          # Create evidence package
+          tar czf evidence-security-scan-${GITEA_RUN_ID}.tar.gz ${SECURITY_REPORT_PATH}/
+          sha256sum evidence-security-scan-${GITEA_RUN_ID}.tar.gz > evidence-security-scan-${GITEA_RUN_ID}.sha256
+
+          # Upload to GCS
+          gsutil cp evidence-security-scan-${GITEA_RUN_ID}.tar.gz ${EVIDENCE_BUCKET}/security-scans/
+          gsutil cp evidence-security-scan-${GITEA_RUN_ID}.sha256 ${EVIDENCE_BUCKET}/security-scans/
+
+          echo "✅ Evidence uploaded with SHA-256: $(cat evidence-security-scan-${GITEA_RUN_ID}.sha256 | cut -d' ' -f1)"
+          echo "::endgroup::"
+
+      - name: Upload Artifacts
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-scan-results-${{ github.run_id }}
+          path: |
+            ${SECURITY_REPORT_PATH}/**/*.json
+            evidence-security-scan-*.tar.gz
+            evidence-security-scan-*.sha256
+          retention-days: 90

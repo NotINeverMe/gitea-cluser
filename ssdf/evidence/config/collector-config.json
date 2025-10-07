@@ -1,0 +1,99 @@
+{
+  "gitea": {
+    "url": "http://localhost:3000",
+    "token": "${GITEA_TOKEN}",
+    "api_version": "v1",
+    "timeout": 30,
+    "verify_ssl": true
+  },
+  "sonarqube": {
+    "url": "http://localhost:9000",
+    "token": "${SONARQUBE_TOKEN}",
+    "timeout": 30,
+    "quality_gate_timeout": 300
+  },
+  "gcs": {
+    "bucket": "compliance-evidence-ssdf",
+    "project": "${GCP_PROJECT}",
+    "credentials_path": "${GOOGLE_APPLICATION_CREDENTIALS}",
+    "region": "us-central1",
+    "storage_class": "STANDARD"
+  },
+  "database": {
+    "host": "localhost",
+    "port": 5432,
+    "database": "compliance",
+    "user": "evidence_collector",
+    "password": "${POSTGRES_PASSWORD}",
+    "pool_size": 5,
+    "timeout": 30
+  },
+  "evidence": {
+    "retention_days": 2555,
+    "hash_algorithm": "sha256",
+    "compression": "gzip",
+    "sign_evidence": true,
+    "temp_dir": "/tmp/evidence-collection"
+  },
+  "verification": {
+    "verify_signatures": true,
+    "minimum_coverage": 80.0,
+    "required_practices": [
+      "PO.3.1",
+      "PW.6.1",
+      "PW.8.1",
+      "PW.9.1",
+      "PS.2.1"
+    ],
+    "high_priority_practices": [
+      "PO.3.1",
+      "PO.3.2",
+      "PS.1.1",
+      "PS.2.1",
+      "PW.6.1",
+      "PW.7.1",
+      "PW.8.1",
+      "PW.9.1"
+    ]
+  },
+  "tools": {
+    "sonarqube": {
+      "enabled": true,
+      "practices": ["PW.6.1", "PW.7.1"],
+      "formats": ["JSON", "SARIF"]
+    },
+    "trivy": {
+      "enabled": true,
+      "practices": ["PW.8.1", "PW.8.2"],
+      "formats": ["JSON"],
+      "scan_types": ["container", "filesystem", "config"]
+    },
+    "syft": {
+      "enabled": true,
+      "practices": ["PW.9.1", "PW.9.2"],
+      "formats": ["spdx-json", "cyclonedx-json"]
+    },
+    "cosign": {
+      "enabled": true,
+      "practices": ["PS.2.1"],
+      "key_path": "${COSIGN_KEY_PATH}",
+      "verify_tlog": true
+    },
+    "grype": {
+      "enabled": true,
+      "practices": ["PW.8.1"],
+      "formats": ["JSON", "SARIF"]
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "json",
+    "output": "stdout",
+    "file": "/var/log/evidence-collector.log"
+  },
+  "notifications": {
+    "enabled": false,
+    "webhook_url": "${WEBHOOK_URL}",
+    "events": ["collection_complete", "collection_failed", "verification_failed"]
+  }
+}

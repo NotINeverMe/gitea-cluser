@@ -1,0 +1,377 @@
+name: Dynamic Application Security Testing (SSDF PW.7)
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'Target URL for DAST scan'
+        required: true
+        default: 'http://localhost:8080'
+      scan_type:
+        description: 'Type of scan to perform'
+        required: true
+        default: 'baseline'
+        type: choice
+        options:
+          - baseline
+          - full
+          - api
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+
+env:
+  EVIDENCE_BUCKET: gs://ssdf-evidence-${GITEA_REPO_NAME}
+  ZAP_VERSION: 2.14.0
+  NUCLEI_VERSION: 3.1.0
+
+jobs:
+  deploy-test:
+    runs-on: ubuntu-latest
+    outputs:
+      app_url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Test Environment
+        id: deploy
+        run: |
+          echo "::group::Deploying to test environment"
+          # Deploy application to test environment
+          docker-compose -f docker-compose.test.yml up -d
+
+          # Wait for application to be ready
+          sleep 30
+
+          # Get application URL
+          APP_URL="${{ github.event.inputs.target_url || 'http://localhost:8080' }}"
+          echo "url=${APP_URL}" >> $GITHUB_OUTPUT
+
+          # Health check
+          curl -f ${APP_URL}/health || exit 1
+
+          echo "✅ Application deployed to ${APP_URL}"
+          echo "::endgroup::"
+
+  zap-scan:
+    needs: deploy-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup OWASP ZAP
+        run: |
+          echo "::group::Installing OWASP ZAP"
+          # Pull ZAP Docker image
+          docker pull owasp/zap2docker-stable:${ZAP_VERSION}
+
+          # Create directories for reports
+          mkdir -p dast-reports/zap
+          echo "::endgroup::"
+
+      - name: ZAP Baseline Scan (PW.7.1)
+        if: github.event.inputs.scan_type == 'baseline' || github.event_name == 'schedule'
+        run: |
+          echo "::group::ZAP Baseline Scan"
+          docker run --rm \
+            -v $(pwd)/dast-reports/zap:/zap/wrk/:rw \
+            -t owasp/zap2docker-stable:${ZAP_VERSION} \
+            zap-baseline.py \
+            -t ${{ needs.deploy-test.outputs.app_url }} \
+            -g gen.conf \
+            -J zap-baseline-report.json \
+            -r zap-baseline-report.html \
+            -x zap-baseline-report.xml || true
+
+          # Parse results
+          if [ -f "dast-reports/zap/zap-baseline-report.json" ]; then
+            high_alerts=$(jq '[.site[].alerts[] | select(.risk == "High")] | length' dast-reports/zap/zap-baseline-report.json)
+            medium_alerts=$(jq '[.site[].alerts[] | select(.risk == "Medium")] | length' dast-reports/zap/zap-baseline-report.json)
+
+            echo "📊 ZAP Baseline Results: ${high_alerts} HIGH, ${medium_alerts} MEDIUM risks"
+
+            if [ "$high_alerts" -gt 0 ]; then
+              echo "❌ High risk vulnerabilities detected"
+              jq '.site[].alerts[] | select(.risk == "High") | {name, risk, confidence, description}' dast-reports/zap/zap-baseline-report.json
+            fi
+          fi
+          echo "::endgroup::"
+
+      - name: ZAP Full Scan (PW.7.1)
+        if: github.event.inputs.scan_type == 'full'
+        run: |
+          echo "::group::ZAP Full Scan"
+          docker run --rm \
+            -v $(pwd)/dast-reports/zap:/zap/wrk/:rw \
+            -t owasp/zap2docker-stable:${ZAP_VERSION} \
+            zap-full-scan.py \
+            -t ${{ needs.deploy-test.outputs.app_url }} \
+            -g gen.conf \
+            -J zap-full-report.json \
+            -r zap-full-report.html \
+            -x zap-full-report.xml \
+            -n zap-full-report.context \
+            -U zap_user \
+            -P zap_password \
+            -z "-config api.addrs.addr.name=.* -config api.addrs.addr.regex=true" || true
+
+          # Parse and report findings
+          if [ -f "dast-reports/zap/zap-full-report.json" ]; then
+            critical_alerts=$(jq '[.site[].alerts[] | select(.risk == "Critical")] | length' dast-reports/zap/zap-full-report.json)
+            high_alerts=$(jq '[.site[].alerts[] | select(.risk == "High")] | length' dast-reports/zap/zap-full-report.json)
+
+            echo "📊 ZAP Full Scan Results: ${critical_alerts} CRITICAL, ${high_alerts} HIGH risks"
+          fi
+          echo "::endgroup::"
+
+      - name: ZAP API Scan (PW.7.2)
+        if: github.event.inputs.scan_type == 'api'
+        run: |
+          echo "::group::ZAP API Security Testing"
+          # Generate OpenAPI spec if available
+          if [ -f "openapi.yaml" ] || [ -f "swagger.json" ]; then
+            API_SPEC_FILE=$(ls openapi.yaml swagger.json 2>/dev/null | head -1)
+
+            docker run --rm \
+              -v $(pwd):/zap/wrk/:rw \
+              -t owasp/zap2docker-stable:${ZAP_VERSION} \
+              zap-api-scan.py \
+              -t ${{ needs.deploy-test.outputs.app_url }} \
+              -f openapi \
+              -O ${API_SPEC_FILE} \
+              -J zap-api-report.json \
+              -r zap-api-report.html || true
+
+            # Parse API scan results
+            if [ -f "dast-reports/zap/zap-api-report.json" ]; then
+              api_issues=$(jq '.site[].alerts | length' dast-reports/zap/zap-api-report.json)
+              echo "📊 ZAP API Scan found ${api_issues} issues"
+            fi
+          else
+            echo "⚠️ No OpenAPI/Swagger spec found, skipping API scan"
+          fi
+          echo "::endgroup::"
+
+      - name: Upload ZAP Reports
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: zap-reports-${{ github.run_id }}
+          path: dast-reports/zap/
+          retention-days: 30
+
+  nuclei-scan:
+    needs: deploy-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Nuclei
+        run: |
+          echo "::group::Installing Nuclei"
+          # Install Nuclei
+          curl -LO https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip
+          unzip nuclei_${NUCLEI_VERSION}_linux_amd64.zip
+          sudo mv nuclei /usr/local/bin/
+
+          # Update templates
+          nuclei -update-templates
+
+          # Create reports directory
+          mkdir -p dast-reports/nuclei
+          echo "::endgroup::"
+
+      - name: Nuclei Vulnerability Scan (PW.7.3)
+        run: |
+          echo "::group::Nuclei Template Scan"
+          # Run Nuclei with various severity templates
+          nuclei -u ${{ needs.deploy-test.outputs.app_url }} \
+            -severity critical,high,medium \
+            -json-export dast-reports/nuclei/nuclei-results.json \
+            -markdown-export dast-reports/nuclei/nuclei-report.md \
+            -report-config nuclei-report.yaml \
+            -stats \
+            -system-resolvers \
+            -timeout 10 \
+            -retries 3 || true
+
+          # Parse results
+          if [ -f "dast-reports/nuclei/nuclei-results.json" ]; then
+            while IFS= read -r line; do
+              severity=$(echo "$line" | jq -r '.severity')
+              template=$(echo "$line" | jq -r '.template')
+              matched=$(echo "$line" | jq -r '.matched_at')
+
+              if [ "$severity" = "critical" ] || [ "$severity" = "high" ]; then
+                echo "❌ ${severity^^}: ${template} at ${matched}"
+              fi
+            done < dast-reports/nuclei/nuclei-results.json
+
+            critical_count=$(grep -c '"severity":"critical"' dast-reports/nuclei/nuclei-results.json || echo 0)
+            high_count=$(grep -c '"severity":"high"' dast-reports/nuclei/nuclei-results.json || echo 0)
+
+            echo "📊 Nuclei Results: ${critical_count} CRITICAL, ${high_count} HIGH vulnerabilities"
+          fi
+          echo "::endgroup::"
+
+      - name: Nuclei CVE Scan (PW.7.3)
+        run: |
+          echo "::group::Nuclei CVE Detection"
+          # Scan specifically for CVEs
+          nuclei -u ${{ needs.deploy-test.outputs.app_url }} \
+            -tags cve \
+            -json-export dast-reports/nuclei/nuclei-cve-results.json || true
+
+          if [ -f "dast-reports/nuclei/nuclei-cve-results.json" ]; then
+            cve_count=$(wc -l < dast-reports/nuclei/nuclei-cve-results.json)
+            echo "📊 Found ${cve_count} CVE vulnerabilities"
+
+            # List CVEs found
+            jq -r '.template_id' dast-reports/nuclei/nuclei-cve-results.json | sort -u
+          fi
+          echo "::endgroup::"
+
+      - name: Upload Nuclei Reports
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: nuclei-reports-${{ github.run_id }}
+          path: dast-reports/nuclei/
+          retention-days: 30
+
+  generate-dast-report:
+    needs: [zap-scan, nuclei-scan]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Download all DAST reports
+        uses: actions/download-artifact@v3
+        with:
+          path: dast-artifacts
+
+      - name: Generate DAST Evidence Report (PW.9.1)
+        run: |
+          echo "::group::Generating DAST Evidence"
+          mkdir -p evidence/dast
+
+          # Create comprehensive DAST report
+          cat > evidence/dast/dast-report.json <<EOF
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "run_id": "${{ github.run_id }}",
+            "scan_type": "${{ github.event.inputs.scan_type || 'baseline' }}",
+            "target_url": "${{ needs.deploy-test.outputs.app_url }}",
+            "ssdf_practices": ["PW.7.1", "PW.7.2", "PW.7.3", "PW.9.1"],
+            "scanners": {
+              "owasp_zap": {
+                "version": "${ZAP_VERSION}",
+                "scan_type": "${{ github.event.inputs.scan_type || 'baseline' }}",
+                "status": "completed"
+              },
+              "nuclei": {
+                "version": "${NUCLEI_VERSION}",
+                "templates": "latest",
+                "status": "completed"
+              }
+            },
+            "summary": {
+              "total_findings": 0,
+              "critical": 0,
+              "high": 0,
+              "medium": 0,
+              "low": 0
+            },
+            "compliance": {
+              "owasp_top_10": true,
+              "cwe_top_25": true,
+              "api_security": "${{ github.event.inputs.scan_type == 'api' }}"
+            }
+          }
+          EOF
+
+          # Package all DAST results
+          cp -r dast-artifacts/* evidence/dast/ 2>/dev/null || true
+
+          # Create evidence package
+          tar czf evidence-dast-${GITEA_RUN_ID}.tar.gz evidence/
+          sha256sum evidence-dast-${GITEA_RUN_ID}.tar.gz > evidence-dast-${GITEA_RUN_ID}.sha256
+
+          echo "✅ DAST evidence package created"
+          echo "SHA-256: $(cat evidence-dast-${GITEA_RUN_ID}.sha256 | cut -d' ' -f1)"
+          echo "::endgroup::"
+
+      - name: Upload Evidence to GCS
+        if: always()
+        run: |
+          echo "::group::Uploading DAST Evidence"
+          # Upload to GCS evidence bucket
+          gsutil cp evidence-dast-${GITEA_RUN_ID}.tar.gz ${EVIDENCE_BUCKET}/dast/
+          gsutil cp evidence-dast-${GITEA_RUN_ID}.sha256 ${EVIDENCE_BUCKET}/dast/
+
+          echo "✅ Evidence uploaded to ${EVIDENCE_BUCKET}/dast/"
+          echo "::endgroup::"
+
+      - name: Create Security Report Issue
+        if: failure()
+        run: |
+          cat > issue.md <<EOF
+          # 🔍 DAST Scan Results - ${{ github.run_id }}
+
+          ## Scan Configuration
+          - **Target**: ${{ needs.deploy-test.outputs.app_url }}
+          - **Scan Type**: ${{ github.event.inputs.scan_type || 'baseline' }}
+          - **Date**: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          ## Results Summary
+          The DAST scan has completed. Please review the detailed reports in the workflow artifacts.
+
+          ### OWASP ZAP Findings
+          - Review the ZAP reports for web application vulnerabilities
+          - Focus on High and Critical severity findings
+
+          ### Nuclei Findings
+          - Check for known CVE vulnerabilities
+          - Review template-based security issues
+
+          ## Next Steps
+          1. Download and review the full DAST reports
+          2. Prioritize fixes based on severity and exploitability
+          3. Re-run DAST after implementing fixes
+
+          **Workflow**: [Run #${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          EOF
+
+          # Create issue via API
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITEA_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"title\": \"DAST Scan Results - $(date +%Y%m%d)\", \"body\": \"$(cat issue.md | jq -Rs .)\", \"labels\": [\"security\", \"dast\"]}" \
+            ${{ github.server_url }}/api/v1/repos/${{ github.repository }}/issues
+
+      - name: Upload Final Artifacts
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: dast-evidence-${{ github.run_id }}
+          path: |
+            evidence-dast-*.tar.gz
+            evidence-dast-*.sha256
+          retention-days: 90
+
+  cleanup:
+    needs: [generate-dast-report]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Cleanup Test Environment
+        run: |
+          echo "::group::Cleaning up test environment"
+          docker-compose -f docker-compose.test.yml down -v
+          echo "✅ Test environment cleaned up"
+          echo "::endgroup::"

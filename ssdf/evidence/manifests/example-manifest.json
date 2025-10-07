@@ -1,0 +1,320 @@
+{
+  "manifest_version": "1.0",
+  "schema": "https://example.com/schemas/ssdf-evidence-manifest/v1.0",
+  "build_id": "550e8400-e29b-41d4-a716-446655440000",
+  "repository": "myorg/myapp",
+  "commit_sha": "abc123def456789012345678901234567890abcd",
+  "branch": "main",
+  "timestamp": "2025-10-07T14:30:00Z",
+  "collector": {
+    "name": "SSDF Evidence Collector",
+    "version": "1.0.0",
+    "framework": "NIST SSDF 1.1"
+  },
+  "ssdf_practices_covered": [
+    {
+      "practice": "PO.3.1",
+      "title": "Implement automated build processes",
+      "group": "PO",
+      "tool": "Gitea Actions",
+      "evidence": "workflow-metadata.json",
+      "description": "Automated build and integration process",
+      "verification_method": "Workflow execution logs and metadata",
+      "timestamp": "2025-10-07T14:30:00Z"
+    },
+    {
+      "practice": "PO.3.2",
+      "title": "Build from version-controlled code",
+      "group": "PO",
+      "tool": "Gitea Actions",
+      "evidence": "workflow-metadata.json",
+      "description": "All builds use code from Git version control",
+      "verification_method": "Git commit SHA verification",
+      "timestamp": "2025-10-07T14:30:00Z"
+    },
+    {
+      "practice": "PW.6.1",
+      "title": "Use automated SAST tools",
+      "group": "PW",
+      "tool": "SonarQube",
+      "evidence": "sonarqube-measures.json",
+      "description": "Use automated SAST tools to identify code vulnerabilities",
+      "verification_method": "SonarQube quality gate analysis",
+      "timestamp": "2025-10-07T14:30:00Z"
+    },
+    {
+      "practice": "PW.7.1",
+      "title": "Review and address code findings",
+      "group": "PW",
+      "tool": "SonarQube",
+      "evidence": "sonarqube-issues.json",
+      "description": "Review code for security vulnerabilities",
+      "verification_method": "Code quality metrics and issue tracking",
+      "timestamp": "2025-10-07T14:30:00Z"
+    },
+    {
+      "practice": "PW.8.1",
+      "title": "Scan for known vulnerabilities",
+      "group": "PW",
+      "tool": "Trivy",
+      "evidence": "trivy-container-scan.json",
+      "description": "Scan for vulnerabilities in dependencies and containers",
+      "verification_method": "Trivy vulnerability database scan",
+      "timestamp": "2025-10-07T14:30:00Z"
+    },
+    {
+      "practice": "PW.9.1",
+      "title": "Generate SBOM",
+      "group": "PW",
+      "tool": "Syft",
+      "evidence": "sbom.spdx.json",
+      "description": "Generate and maintain SBOM for all software components",
+      "verification_method": "SBOM validation and component inventory",
+      "timestamp": "2025-10-07T14:30:00Z"
+    },
+    {
+      "practice": "PS.1.1",
+      "title": "Store and protect code and artifacts",
+      "group": "PS",
+      "tool": "Syft",
+      "evidence": "sbom.spdx.json",
+      "description": "Store and distribute SBOM with software releases",
+      "verification_method": "SBOM availability in evidence package",
+      "timestamp": "2025-10-07T14:30:00Z"
+    },
+    {
+      "practice": "PS.2.1",
+      "title": "Provide integrity verification mechanism",
+      "group": "PS",
+      "tool": "Cosign",
+      "evidence": "provenance.json",
+      "description": "Sign software artifacts with cryptographic signatures",
+      "verification_method": "Cosign signature verification",
+      "timestamp": "2025-10-07T14:30:00Z"
+    }
+  ],
+  "evidence_files": [
+    {
+      "filename": "workflow-metadata.json",
+      "hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 4096,
+      "tool": "Gitea Actions",
+      "format": "JSON",
+      "collected_at": "2025-10-07T14:30:00Z",
+      "source_url": "http://localhost:3000/api/v1/repos/myorg/myapp/actions/runs/12345",
+      "mime_type": "application/json"
+    },
+    {
+      "filename": "sonarqube-measures.json",
+      "hash": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+      "size": 8192,
+      "tool": "SonarQube",
+      "format": "JSON",
+      "collected_at": "2025-10-07T14:30:00Z",
+      "source_url": "http://localhost:9000/api/measures/component",
+      "mime_type": "application/json"
+    },
+    {
+      "filename": "sonarqube-issues.json",
+      "hash": "sha256:fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9",
+      "size": 16384,
+      "tool": "SonarQube",
+      "format": "JSON",
+      "collected_at": "2025-10-07T14:30:00Z",
+      "source_url": "http://localhost:9000/api/issues/search",
+      "mime_type": "application/json"
+    },
+    {
+      "filename": "trivy-container-scan.json",
+      "hash": "sha256:bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721",
+      "size": 32768,
+      "tool": "Trivy",
+      "format": "JSON",
+      "collected_at": "2025-10-07T14:30:00Z",
+      "source_url": null,
+      "mime_type": "application/json"
+    },
+    {
+      "filename": "trivy-fs-scan.json",
+      "hash": "sha256:d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35",
+      "size": 24576,
+      "tool": "Trivy",
+      "format": "JSON",
+      "collected_at": "2025-10-07T14:30:00Z",
+      "source_url": null,
+      "mime_type": "application/json"
+    },
+    {
+      "filename": "sbom.spdx.json",
+      "hash": "sha256:4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+      "size": 65536,
+      "tool": "Syft",
+      "format": "JSON (SPDX)",
+      "collected_at": "2025-10-07T14:30:00Z",
+      "source_url": null,
+      "mime_type": "application/json"
+    },
+    {
+      "filename": "sbom.cyclonedx.json",
+      "hash": "sha256:4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
+      "size": 61440,
+      "tool": "Syft",
+      "format": "JSON (CycloneDX)",
+      "collected_at": "2025-10-07T14:30:00Z",
+      "source_url": null,
+      "mime_type": "application/json"
+    },
+    {
+      "filename": "provenance.json",
+      "hash": "sha256:ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d",
+      "size": 2048,
+      "tool": "Build System",
+      "format": "JSON",
+      "collected_at": "2025-10-07T14:30:00Z",
+      "source_url": null,
+      "mime_type": "application/json"
+    },
+    {
+      "filename": "provenance.json.sig",
+      "hash": "sha256:e7f6c011776e8db7cd330b54174fd76f7d0216b612387a5ffcfb81e6f0919683",
+      "size": 512,
+      "tool": "Cosign",
+      "format": "Signature",
+      "collected_at": "2025-10-07T14:30:00Z",
+      "source_url": null,
+      "mime_type": "application/octet-stream"
+    }
+  ],
+  "attestations": [
+    {
+      "type": "SLSA Provenance",
+      "file": "provenance.json",
+      "signature": "provenance.json.sig",
+      "verified": true,
+      "public_key_id": "sha256:abcd1234",
+      "algorithm": "ECDSA-P256-SHA256",
+      "timestamp": "2025-10-07T14:30:00Z"
+    }
+  ],
+  "compliance_summary": {
+    "framework": "NIST SSDF 1.1",
+    "total_practices": 42,
+    "practices_covered": 8,
+    "coverage_percent": 19.05,
+    "practices_by_group": {
+      "PO": 2,
+      "PS": 2,
+      "PW": 4,
+      "RV": 0
+    },
+    "missing_practices": [
+      {
+        "practice": "PO.1.1",
+        "title": "Identify and document security requirements",
+        "group": "PO"
+      },
+      {
+        "practice": "PW.1.1",
+        "title": "Design software securely",
+        "group": "PW"
+      },
+      {
+        "practice": "PW.4.1",
+        "title": "Review code for security issues",
+        "group": "PW"
+      },
+      {
+        "practice": "RV.1.1",
+        "title": "Monitor for vulnerabilities",
+        "group": "RV"
+      }
+    ]
+  },
+  "tools_used": [
+    {
+      "name": "Gitea Actions",
+      "evidence_count": 1,
+      "practices_covered": [
+        "PO.3.1",
+        "PO.3.2"
+      ],
+      "formats": [
+        "JSON"
+      ]
+    },
+    {
+      "name": "SonarQube",
+      "evidence_count": 2,
+      "practices_covered": [
+        "PW.6.1",
+        "PW.7.1"
+      ],
+      "formats": [
+        "JSON"
+      ]
+    },
+    {
+      "name": "Trivy",
+      "evidence_count": 2,
+      "practices_covered": [
+        "PW.8.1"
+      ],
+      "formats": [
+        "JSON"
+      ]
+    },
+    {
+      "name": "Syft",
+      "evidence_count": 2,
+      "practices_covered": [
+        "PS.1.1",
+        "PW.9.1"
+      ],
+      "formats": [
+        "JSON (CycloneDX)",
+        "JSON (SPDX)"
+      ]
+    },
+    {
+      "name": "Cosign",
+      "evidence_count": 1,
+      "practices_covered": [
+        "PS.2.1"
+      ],
+      "formats": [
+        "Signature"
+      ]
+    }
+  ],
+  "retention": {
+    "policy": "7-year retention per compliance requirements",
+    "retention_days": 2555,
+    "storage_class_transitions": [
+      {
+        "days": 90,
+        "storage_class": "COLDLINE",
+        "description": "Move to cold storage after 90 days"
+      },
+      {
+        "days": 365,
+        "storage_class": "ARCHIVE",
+        "description": "Move to archive storage after 1 year"
+      }
+    ],
+    "deletion_date": "2032-10-07T14:30:00Z"
+  },
+  "metadata": {
+    "workflow_id": 12345,
+    "run_number": 42,
+    "triggering_actor": "developer@example.com",
+    "build_duration": 320,
+    "build_status": "success",
+    "environment": "production",
+    "tags": [
+      "release",
+      "v1.2.3",
+      "production"
+    ]
+  },
+  "manifest_hash": "sha256:a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3"
+}

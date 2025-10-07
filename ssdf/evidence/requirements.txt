@@ -1,0 +1,43 @@
+# SSDF Evidence Collection Framework
+# Python 3.11+ required
+
+# Google Cloud Storage
+google-cloud-storage>=2.10.0
+
+# PostgreSQL database
+psycopg2-binary>=2.9.9
+
+# HTTP requests
+requests>=2.31.0
+
+# Date/time utilities
+python-dateutil>=2.8.2
+
+# YAML parsing
+pyyaml>=6.0.1
+
+# JSON schema validation
+jsonschema>=4.19.0
+
+# CLI utilities
+click>=8.1.7
+
+# Logging
+python-json-logger>=2.0.7
+
+# Cryptography (for hash verification)
+cryptography>=41.0.0
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# PDF generation (for reports)
+reportlab>=4.0.5
+
+# Development dependencies
+# Uncomment for development
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+# black>=23.7.0
+# flake8>=6.1.0
+# mypy>=1.5.0

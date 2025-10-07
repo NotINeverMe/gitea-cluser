@@ -1,0 +1,185 @@
+name: Pre-Commit Security (SSDF PO.1/PS.1)
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    types: [opened, synchronize]
+
+env:
+  EVIDENCE_BUCKET: gs://ssdf-evidence-${GITEA_REPO_NAME}
+  EVIDENCE_PREFIX: pre-commit/${GITEA_RUN_ID}
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/gitea/act_runner:latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git-secrets
+
+      - name: Setup Security Tools
+        run: |
+          # Install security tools
+          apt-get update && apt-get install -y python3-pip git curl
+          pip3 install git-secrets semgrep ansible-lint bandit safety
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Git Secrets Scan (PO.1.1)
+        id: git-secrets
+        run: |
+          echo "::group::Git Secrets Configuration"
+          git secrets --install
+          git secrets --register-aws
+          git secrets --register-gcp
+          git secrets --register-azure
+          echo "::endgroup::"
+
+          echo "::group::Scanning for secrets"
+          git secrets --scan --recursive || exit_code=$?
+          if [ "${exit_code}" != "0" ]; then
+            echo "❌ CRITICAL: Secrets detected in code"
+            echo "secrets_found=true" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "✅ No secrets detected"
+          echo "secrets_found=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+
+      - name: Semgrep SAST (PS.1.1)
+        id: semgrep
+        run: |
+          echo "::group::Semgrep Security Scan"
+          semgrep --config=auto \
+            --json \
+            --output=semgrep-results.json \
+            --metrics=off \
+            --severity=ERROR,WARNING \
+            . || true
+
+          # Parse results
+          critical_count=$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' semgrep-results.json)
+          high_count=$(jq '[.results[] | select(.extra.severity == "WARNING")] | length' semgrep-results.json)
+
+          echo "critical_findings=${critical_count}" >> $GITHUB_OUTPUT
+          echo "high_findings=${high_count}" >> $GITHUB_OUTPUT
+
+          if [ "$critical_count" -gt 0 ]; then
+            echo "❌ CRITICAL: Found ${critical_count} critical security issues"
+            jq '.results[] | select(.extra.severity == "ERROR") | {path, line, message: .extra.message}' semgrep-results.json
+            exit 1
+          fi
+          echo "✅ Semgrep scan completed: ${high_count} warnings"
+          echo "::endgroup::"
+
+      - name: Ansible Lint (PS.2.1)
+        if: hashFiles('playbooks/**/*.yml') != ''
+        run: |
+          echo "::group::Ansible Lint"
+          ansible-lint playbooks/ --format json > ansible-lint-results.json || true
+          violation_count=$(jq '. | length' ansible-lint-results.json)
+          echo "ansible_violations=${violation_count}" >> $GITHUB_OUTPUT
+
+          if [ "$violation_count" -gt 10 ]; then
+            echo "❌ Too many Ansible violations: ${violation_count}"
+            exit 1
+          fi
+          echo "✅ Ansible lint passed with ${violation_count} warnings"
+          echo "::endgroup::"
+
+      - name: Python Security - Bandit (PS.1.1)
+        if: hashFiles('**/*.py') != ''
+        run: |
+          echo "::group::Bandit Security Scan"
+          bandit -r . -f json -o bandit-results.json || true
+
+          high_severity=$(jq '.results | map(select(.issue_severity == "HIGH")) | length' bandit-results.json)
+          medium_severity=$(jq '.results | map(select(.issue_severity == "MEDIUM")) | length' bandit-results.json)
+
+          echo "bandit_high=${high_severity}" >> $GITHUB_OUTPUT
+          echo "bandit_medium=${medium_severity}" >> $GITHUB_OUTPUT
+
+          if [ "$high_severity" -gt 0 ]; then
+            echo "❌ Found ${high_severity} high severity issues"
+            jq '.results[] | select(.issue_severity == "HIGH") | {filename, line_number, issue_text}' bandit-results.json
+            exit 1
+          fi
+          echo "✅ Bandit scan passed"
+          echo "::endgroup::"
+
+      - name: Dependency Check (PO.4.1)
+        run: |
+          echo "::group::Dependency Security Check"
+          # Check Python dependencies
+          if [ -f "requirements.txt" ]; then
+            safety check --json --output safety-results.json || true
+            vuln_count=$(jq '.vulnerabilities | length' safety-results.json)
+            echo "dependency_vulns=${vuln_count}" >> $GITHUB_OUTPUT
+
+            if [ "$vuln_count" -gt 0 ]; then
+              echo "⚠️ Found ${vuln_count} vulnerable dependencies"
+              jq '.vulnerabilities[] | {package, vulnerability, severity}' safety-results.json
+            fi
+          fi
+
+          # Check for package-lock.json or yarn.lock
+          if [ -f "package-lock.json" ] || [ -f "yarn.lock" ]; then
+            npm audit --json > npm-audit.json || true
+            critical_npm=$(jq '.metadata.vulnerabilities.critical // 0' npm-audit.json)
+            if [ "$critical_npm" -gt 0 ]; then
+              echo "❌ Found ${critical_npm} critical npm vulnerabilities"
+              exit 1
+            fi
+          fi
+          echo "::endgroup::"
+
+      - name: Collect Evidence (PO.3.2)
+        if: always()
+        run: |
+          echo "::group::Evidence Collection"
+          mkdir -p evidence/pre-commit
+
+          # Collect all scan results
+          cp -f *-results.json evidence/pre-commit/ 2>/dev/null || true
+
+          # Generate evidence manifest
+          cat > evidence/pre-commit/manifest.json <<EOF
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "run_id": "${GITEA_RUN_ID}",
+            "commit_sha": "${GITEA_SHA}",
+            "branch": "${GITEA_REF_NAME}",
+            "ssdf_practices": ["PO.1.1", "PO.3.2", "PO.4.1", "PS.1.1", "PS.2.1"],
+            "scans_performed": {
+              "git_secrets": "${{ steps.git-secrets.outputs.secrets_found }}",
+              "semgrep": {
+                "critical": "${{ steps.semgrep.outputs.critical_findings }}",
+                "high": "${{ steps.semgrep.outputs.high_findings }}"
+              },
+              "bandit": {
+                "high": "${{ steps.bandit.outputs.bandit_high }}",
+                "medium": "${{ steps.bandit.outputs.bandit_medium }}"
+              }
+            }
+          }
+          EOF
+
+          # Create evidence package
+          tar czf evidence-pre-commit-${GITEA_RUN_ID}.tar.gz evidence/
+          sha256sum evidence-pre-commit-${GITEA_RUN_ID}.tar.gz > evidence-pre-commit-${GITEA_RUN_ID}.sha256
+
+          echo "✅ Evidence package created"
+          echo "::endgroup::"
+
+      - name: Upload Evidence
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: pre-commit-evidence-${{ github.run_id }}
+          path: |
+            evidence-pre-commit-*.tar.gz
+            evidence-pre-commit-*.sha256
+          retention-days: 90
