@@ -1,0 +1,122 @@
+# Terraform State Files
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+terraform.tfstate.d/
+
+# Terraform Variables
+terraform.tfvars
+terraform.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraform Directory
+.terraform/
+.terraform.lock.hcl
+
+# Terraform Plan Files
+*.tfplan
+tfplan
+plan.out
+plan.json
+
+# Crash Logs
+crash.log
+crash.*.log
+
+# Secrets and Credentials
+*.key
+*.pem
+*.pfx
+*.p12
+*.crt
+*.cer
+*.der
+credentials.json
+service-account.json
+gcp-key.json
+secrets/
+.env
+.env.*
+
+# Evidence Files (except examples)
+evidence/*.json
+evidence/*.log
+!evidence/example.json
+!evidence/.gitkeep
+
+# Backup Files
+*.backup
+*.bak
+*.tmp
+*.temp
+*~
+
+# OS Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE Files
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# Python Files (if using Python scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.Python
+
+# Log Files
+*.log
+logs/
+!logs/.gitkeep
+
+# Archives
+*.tar
+*.tar.gz
+*.zip
+*.rar
+*.7z
+
+# Temporary Directories
+temp/
+tmp/
+.tmp/
+
+# Destroyed/Old Configuration
+*.destroyed.*
+*.old
+*.orig
+
+# Local Testing
+local-test/
+test-outputs/
+
+# Documentation Build Artifacts
+docs/_build/
+*.pdf
+
+# Terraform Sentinel
+*.sentinel
+
+# Atlantis
+atlantis.yaml
+.atlantis/
+
+# Infracost
+.infracost/
+
+# Keep these files
+!.gitignore
+!README.md
+!LICENSE

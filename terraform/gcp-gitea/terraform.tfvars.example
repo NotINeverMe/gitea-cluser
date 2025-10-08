@@ -1,0 +1,332 @@
+# Terraform Variables Example File for Gitea GCP Deployment
+# CMMC 2.0 Level 2 and NIST SP 800-171 Rev. 2 Compliant Configuration
+#
+# Copy this file to terraform.tfvars and customize for your environment
+# IMPORTANT: Never commit terraform.tfvars to version control
+
+# ============================================================================
+# PROJECT & REGION CONFIGURATION
+# ============================================================================
+
+# GCP Project ID (REQUIRED)
+# Must be 6-30 characters, lowercase letters, digits, or hyphens
+project_id = "my-gitea-project"
+
+# GCP Region for resource deployment
+# Choose a region close to your users for better performance
+region = "us-central1"
+
+# GCP Zone for Compute Engine instance
+# Must be within the selected region
+zone = "us-central1-a"
+
+# Environment name
+# Options: dev, staging, prod
+# This affects retention policies, deletion protection, and other settings
+environment = "prod"
+
+# ============================================================================
+# NETWORKING CONFIGURATION
+# ============================================================================
+
+# CIDR range for the Gitea subnet
+# Default: 10.0.1.0/24 provides 254 usable IP addresses
+subnet_cidr = "10.0.1.0/24"
+
+# Enable Cloud NAT for outbound internet access
+# Required for package updates, Docker image pulls, etc.
+enable_cloud_nat = true
+
+# CIDR ranges allowed for SSH access
+# Default: IAP range only (35.235.240.0/20)
+# For additional ranges: ["35.235.240.0/20", "YOUR_OFFICE_IP/32"]
+allowed_ssh_cidr_ranges = ["35.235.240.0/20"]
+
+# CIDR ranges allowed for HTTPS access
+# Default: 0.0.0.0/0 (public access)
+# For restricted access: ["YOUR_OFFICE_CIDR/24", "VPN_CIDR/16"]
+allowed_https_cidr_ranges = ["0.0.0.0/0"]
+
+# CIDR ranges allowed for Git SSH access
+# Default: empty (disabled)
+# Enable for specific IPs: ["DEVELOPER_IP/32", "CI_SYSTEM_IP/32"]
+allowed_git_ssh_cidr_ranges = []
+
+# ============================================================================
+# COMPUTE INSTANCE CONFIGURATION
+# ============================================================================
+
+# Machine type for Gitea instance
+# Recommended minimums:
+# - Small teams (< 50 users): e2-standard-4
+# - Medium teams (50-200 users): e2-standard-8
+# - Large teams (200+ users): n2-standard-16 or higher
+machine_type = "e2-standard-8"
+
+# Minimum CPU platform
+# Options: "Intel Cascade Lake", "Intel Ice Lake", "AMD Milan"
+cpu_platform = "Intel Cascade Lake"
+
+# Boot disk size in GB (100-1000)
+# Stores OS, Docker, and application binaries
+boot_disk_size = 200
+
+# Boot disk type
+# Options: pd-standard (HDD), pd-balanced, pd-ssd (recommended)
+boot_disk_type = "pd-ssd"
+
+# Data disk size in GB for Docker volumes (100-10000)
+# Stores Git repositories, database, and application data
+data_disk_size = 500
+
+# Data disk type
+# pd-ssd recommended for better Git performance
+data_disk_type = "pd-ssd"
+
+# ============================================================================
+# SECURITY CONFIGURATION - CMMC/NIST COMPLIANCE
+# ============================================================================
+
+# Shielded VM settings (REQUIRED for CMMC compliance)
+enable_secure_boot          = true  # SC.L2-3.13.15
+enable_vtpm                 = true  # SC.L2-3.13.15
+enable_integrity_monitoring = true  # SI.L2-3.14.1
+
+# Enable OS Login for centralized SSH key management
+# Required for IA.L2-3.5.1 compliance
+enable_os_login = true
+
+# Enable Identity-Aware Proxy for secure SSH access
+# Provides additional authentication layer
+enable_iap = true
+
+# Enable Cloud KMS for encryption at rest
+# Required for SC.L2-3.13.11 compliance
+enable_kms = true
+
+# Enable Secret Manager for credential storage
+# Required for IA.L2-3.5.7 compliance
+enable_secret_manager = true
+
+# Enable Cloud Armor WAF protection
+# Provides DDoS and application-layer attack protection
+enable_cloud_armor = true
+
+# Enable VPC Service Controls (requires organization setup)
+# Provides additional network security perimeter
+enable_vpc_sc = false
+
+# Enable all Shielded VM features
+enable_shielded_vm = true
+
+# ============================================================================
+# GITEA CONFIGURATION
+# ============================================================================
+
+# Domain name for Gitea (REQUIRED)
+# Must be a valid FQDN that you control
+# SSL certificate will be needed for this domain
+gitea_domain = "git.example.com"
+
+# Gitea admin username
+# Used for initial administrator account
+gitea_admin_username = "admin"
+
+# Gitea admin password (min 14 chars, complex)
+# Leave as null to auto-generate a secure password
+# If set, must include uppercase, lowercase, digit, and special character
+gitea_admin_password = null  # Auto-generated and stored in Secret Manager
+
+# Gitea admin email address (REQUIRED)
+# Used for administrator notifications
+gitea_admin_email = "admin@example.com"
+
+# PostgreSQL password
+# Leave as null to auto-generate
+postgres_password = null  # Auto-generated and stored in Secret Manager
+
+# Disable public user registration
+# Recommended for internal/private instances
+gitea_disable_registration = true
+
+# Require sign-in to view repositories
+# Set to true for private instances
+gitea_require_signin_view = false
+
+# ============================================================================
+# STORAGE CONFIGURATION - RETENTION POLICIES
+# ============================================================================
+
+# Evidence retention in days
+# CMMC 2.0 Level 2 requires 7 years (2555 days)
+evidence_retention_days = 2555
+
+# Backup retention in days
+# Balance between storage costs and recovery needs
+backup_retention_days = 30
+
+# Logs retention in days
+# Consider compliance requirements and analysis needs
+logs_retention_days = 90
+
+# Enable versioning on GCS buckets
+# Required for AU.L2-3.3.8 compliance
+enable_bucket_versioning = true
+
+# ============================================================================
+# MONITORING & ALERTING - SI.L2-3.14.1 COMPLIANCE
+# ============================================================================
+
+# Enable Cloud Monitoring dashboards and alerts
+# Required for system monitoring compliance
+enable_monitoring = true
+
+# Email address for alert notifications
+# Leave empty to disable email alerts
+alert_email = "ops-team@example.com"
+
+# Enable uptime checks for Gitea
+# Monitors HTTPS endpoint availability
+enable_uptime_checks = true
+
+# ============================================================================
+# BACKUP & DISASTER RECOVERY - CP.L2-3.11.1 COMPLIANCE
+# ============================================================================
+
+# Enable automated daily backups via Cloud Scheduler
+enable_automated_backups = true
+
+# Cron schedule for automated backups
+# Default: 2 AM UTC daily
+backup_schedule = "0 2 * * *"
+
+# Enable cross-region backup replication for DR
+# Provides geographic redundancy
+enable_cross_region_backup = false
+
+# Secondary region for backup replication
+# Should be geographically distant from primary region
+backup_region = "us-east1"
+
+# ============================================================================
+# LABELS & TAGGING
+# ============================================================================
+
+# Additional labels for all resources
+# Used for cost allocation, compliance tracking, etc.
+additional_labels = {
+  "department"    = "engineering"
+  "cost-center"   = "it-infrastructure"
+  "data-classification" = "cui"  # Controlled Unclassified Information
+  "compliance"    = "cmmc-level-2"
+  "owner"         = "platform-team"
+  "project-code"  = "git-001"
+}
+
+# ============================================================================
+# ADVANCED CONFIGURATION
+# ============================================================================
+
+# Configure Docker to use Google Container Registry
+# Allows pulling private images from GCR
+enable_docker_gcr = false
+
+# Custom startup script to append to the default script
+# Use for additional customizations
+# Example: "echo 'Custom configuration' >> /etc/gitea/custom.conf"
+custom_startup_script = ""
+
+# Additional instance metadata
+# Key-value pairs added to the instance
+metadata = {
+  "enable-guest-attributes" = "TRUE"
+  "enable-osconfig"        = "TRUE"
+  "osconfig-log-level"     = "info"
+}
+
+# ============================================================================
+# VALIDATION CHECKLIST
+# ============================================================================
+# Before applying this configuration, ensure:
+#
+# 1. [ ] GCP Project exists and you have Owner/Editor permissions
+# 2. [ ] Required APIs are enabled:
+#        - Compute Engine API
+#        - Cloud Storage API
+#        - Cloud KMS API
+#        - Secret Manager API
+#        - Cloud Monitoring API
+#        - Cloud Logging API
+# 3. [ ] DNS is configured to point gitea_domain to the instance IP
+# 4. [ ] SSL certificate is ready for the domain
+# 5. [ ] Billing is enabled on the project
+# 6. [ ] Service account has necessary permissions
+# 7. [ ] Firewall exceptions are documented if needed
+# 8. [ ] Backup and recovery procedures are documented
+# 9. [ ] Monitoring alert recipients are configured
+# 10. [ ] Compliance requirements are reviewed
+
+# ============================================================================
+# ESTIMATED MONTHLY COSTS (USD)
+# ============================================================================
+# Based on default configuration in us-central1:
+#
+# Compute Engine (e2-standard-8, always on):        ~$195
+# Persistent Disk (200GB SSD boot + 500GB SSD):     ~$119
+# Cloud Storage (3 buckets, minimal usage):         ~$10
+# Cloud KMS (3 keys, minimal operations):           ~$3
+# Secret Manager (3 secrets):                       ~$0.18
+# Cloud Monitoring (basic metrics):                 ~$0
+# Static IP Address:                                ~$7
+# Cloud NAT:                                        ~$45
+# Network Egress (10GB/month estimate):             ~$1.20
+#
+# ESTIMATED TOTAL: ~$380/month
+#
+# Note: Costs will vary based on usage, region, and sustained use discounts
+
+# ============================================================================
+# TERRAFORM COMMANDS
+# ============================================================================
+# Initialize Terraform:
+#   terraform init
+#
+# Review planned changes:
+#   terraform plan
+#
+# Apply configuration:
+#   terraform apply
+#
+# Destroy resources (WARNING: Data loss):
+#   terraform destroy
+#
+# Import existing resources:
+#   terraform import google_compute_instance.gitea_server projects/PROJECT_ID/zones/ZONE/instances/INSTANCE_NAME
+
+# ============================================================================
+# POST-DEPLOYMENT STEPS
+# ============================================================================
+# 1. Configure DNS A record for gitea_domain
+# 2. Install SSL certificate (Let's Encrypt recommended)
+# 3. Access Gitea web UI and complete setup wizard
+# 4. Configure email settings for notifications
+# 5. Create additional users and teams
+# 6. Set up CI/CD runners if needed
+# 7. Configure webhooks for integrations
+# 8. Test backup and restore procedures
+# 9. Verify monitoring alerts are working
+# 10. Document operational procedures
+
+# ============================================================================
+# SECURITY BEST PRACTICES
+# ============================================================================
+# - Regularly update all software components
+# - Review audit logs weekly
+# - Test disaster recovery procedures quarterly
+# - Rotate secrets and credentials regularly
+# - Monitor for security advisories
+# - Implement least privilege access
+# - Enable MFA for all admin accounts
+# - Use strong, unique passwords
+# - Keep terraform state files secure
+# - Never commit sensitive data to git

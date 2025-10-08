@@ -1,0 +1,377 @@
+version: '3.8'
+
+# GCP-Optimized Gitea Docker Compose Stack
+# CMMC 2.0 Level 2 Compliant Configuration
+# Designed for GCP Compute Engine deployment with Cloud Logging integration
+
+# Load environment variables from Secret Manager via startup script
+# Variables are injected at runtime from /etc/gitea/secrets.env
+
+networks:
+  gitea_default:
+    name: gitea_default
+    driver: bridge
+  gitea_data:
+    name: gitea_data
+    driver: bridge
+    internal: true  # No external internet access
+  gitea_monitoring:
+    name: gitea_monitoring
+    driver: bridge
+
+volumes:
+  gitea_data:
+    name: gitea_data
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/gitea-data/gitea
+      o: bind
+  gitea_config:
+    name: gitea_config
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/gitea-data/config
+      o: bind
+  postgres_gitea_data:
+    name: postgres_gitea_data
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/gitea-data/postgres
+      o: bind
+  gitea_actions_cache:
+    name: gitea_actions_cache
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/gitea-data/actions-cache
+      o: bind
+  caddy_data:
+    name: caddy_gitea_data
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/gitea-data/caddy-data
+      o: bind
+  caddy_config:
+    name: caddy_gitea_config
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/gitea-data/caddy-config
+      o: bind
+
+services:
+  # PostgreSQL database for Gitea
+  postgres-gitea:
+    image: postgres:15-alpine
+    container_name: postgres-gitea
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: gitea
+      POSTGRES_USER: gitea
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+
+    secrets:
+      - postgres_password
+
+    volumes:
+      - postgres_gitea_data:/var/lib/postgresql/data
+      - /mnt/gitea-backups/postgres:/backups
+
+    ports:
+      - "127.0.0.1:5432:5432"  # Only localhost access
+
+    networks:
+      - gitea_data
+      - gitea_monitoring
+
+    # Cloud Logging driver for GCP integration
+    logging:
+      driver: gcplogs
+      options:
+        gcp-log-cmd: "true"
+        labels: "com.gitea.component,com.cmmc.asset-category"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitea -d gitea"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    labels:
+      - "com.gitea.component=database"
+      - "com.gitea.tier=data"
+      - "com.cmmc.asset-category=SPA"
+      - "com.cmmc.control=AC.L2-3.1.1,AU.L2-3.3.1"
+      - "com.devsecops.stack=gitea"
+      - "com.devsecops.environment=${ENVIRONMENT:-prod}"
+
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+  # Gitea Git Server (rootless)
+  gitea:
+    image: gitea/gitea:1.21-rootless
+    container_name: gitea
+    restart: unless-stopped
+
+    environment:
+      # Database configuration
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: postgres-gitea:5432
+      GITEA__database__NAME: gitea
+      GITEA__database__USER: gitea
+      GITEA__database__PASSWD: ${POSTGRES_PASSWORD}
+
+      # Server configuration
+      GITEA__server__DOMAIN: ${GITEA_DOMAIN}
+      GITEA__server__SSH_DOMAIN: ${GITEA_DOMAIN}
+      GITEA__server__ROOT_URL: https://${GITEA_DOMAIN}/
+      GITEA__server__HTTP_PORT: 3000
+      GITEA__server__SSH_PORT: 2222
+      GITEA__server__START_SSH_SERVER: true
+      GITEA__server__LFS_START_SERVER: true
+      GITEA__server__OFFLINE_MODE: false
+
+      # Security configuration - CMMC IA.L2-3.5.1
+      GITEA__security__INSTALL_LOCK: true
+      GITEA__security__SECRET_KEY_FILE: /run/secrets/gitea_secret_key
+      GITEA__security__INTERNAL_TOKEN_FILE: /run/secrets/gitea_internal_token
+      GITEA__security__PASSWORD_HASH_ALGO: argon2
+      GITEA__security__MIN_PASSWORD_LENGTH: 14
+      GITEA__security__PASSWORD_COMPLEXITY: lower,upper,digit,spec
+
+      # Session configuration - CMMC SC.L2-3.13.8
+      GITEA__session__PROVIDER: db
+      GITEA__session__COOKIE_SECURE: true  # HTTPS required
+      GITEA__session__COOKIE_NAME: gitea_session
+      GITEA__session__SAME_SITE: strict
+
+      # Logging configuration - CMMC AU.L2-3.3.1
+      GITEA__log__MODE: console
+      GITEA__log__LEVEL: Info
+      GITEA__log__ENABLE_ACCESS_LOG: true
+      GITEA__log__ACCESS_LOG_TEMPLATE: {{.Ctx.RemoteAddr}} - {{.Identity}} {{.Start.Format "[02/Jan/2006:15:04:05 -0700]" }} "{{.Ctx.Req.Method}} {{.Ctx.Req.URL.RequestURI}} {{.Ctx.Req.Proto}}" {{.ResponseWriter.Status}} {{.ResponseWriter.Size}} "{{.Ctx.Req.Referer}}" "{{.Ctx.Req.UserAgent}}"
+
+      # Repository configuration
+      GITEA__repository__ROOT: /var/lib/gitea/git/repositories
+      GITEA__repository__DEFAULT_BRANCH: main
+      GITEA__repository__ENABLE_PUSH_CREATE_USER: true
+      GITEA__repository__ENABLE_PUSH_CREATE_ORG: true
+
+      # Service configuration
+      GITEA__service__DISABLE_REGISTRATION: ${GITEA_DISABLE_REGISTRATION:-true}
+      GITEA__service__REQUIRE_SIGNIN_VIEW: ${GITEA_REQUIRE_SIGNIN_VIEW:-false}
+      GITEA__service__REGISTER_EMAIL_CONFIRM: true
+      GITEA__service__ENABLE_NOTIFY_MAIL: true
+      GITEA__service__DEFAULT_KEEP_EMAIL_PRIVATE: true
+      GITEA__service__DEFAULT_ALLOW_CREATE_ORGANIZATION: true
+
+      # OAuth2 configuration
+      GITEA__oauth2__ENABLE: true
+      GITEA__oauth2__JWT_SECRET_FILE: /run/secrets/gitea_oauth2_jwt_secret
+
+      # Actions (CI/CD) configuration
+      GITEA__actions__ENABLED: true
+      GITEA__actions__DEFAULT_ACTIONS_URL: https://github.com
+
+      # Webhook configuration
+      GITEA__webhook__ALLOWED_HOST_LIST: "*"
+      GITEA__webhook__SKIP_TLS_VERIFY: false
+
+      # Metrics configuration (Prometheus) - CMMC SI.L2-3.14.1
+      GITEA__metrics__ENABLED: true
+      GITEA__metrics__TOKEN_FILE: /run/secrets/gitea_metrics_token
+
+      # GCP-specific: Cloud Logging metadata
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID}
+      GCP_REGION: ${GCP_REGION}
+      ENVIRONMENT: ${ENVIRONMENT:-prod}
+
+      # User/UID for rootless
+      USER_UID: 1000
+      USER_GID: 1000
+
+    secrets:
+      - postgres_password
+      - gitea_secret_key
+      - gitea_internal_token
+      - gitea_oauth2_jwt_secret
+      - gitea_metrics_token
+
+    volumes:
+      - gitea_data:/var/lib/gitea
+      - gitea_config:/etc/gitea
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /mnt/gitea-evidence:/evidence:ro  # GCS-mounted evidence bucket
+
+    ports:
+      - "${GITEA_HTTP_PORT:-3000}:3000"
+      - "${GITEA_SSH_PORT:-10001}:2222"
+
+    networks:
+      - gitea_default
+      - gitea_data
+      - gitea_monitoring
+
+    depends_on:
+      postgres-gitea:
+        condition: service_healthy
+
+    logging:
+      driver: gcplogs
+      options:
+        gcp-log-cmd: "true"
+        labels: "com.gitea.component,com.cmmc.asset-category"
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    labels:
+      - "com.gitea.component=server"
+      - "com.gitea.tier=application"
+      - "com.cmmc.asset-category=CUI"
+      - "com.cmmc.control=AC.L2-3.1.1,AU.L2-3.3.1,IA.L2-3.5.1,SC.L2-3.13.8"
+      - "com.devsecops.stack=gitea"
+      - "com.devsecops.environment=${ENVIRONMENT:-prod}"
+
+    deploy:
+      resources:
+        limits:
+          cpus: '8'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 2G
+
+  # Gitea Actions Runner (CI/CD)
+  gitea-runner:
+    image: gitea/act_runner:latest
+    container_name: gitea-runner
+    restart: unless-stopped
+
+    environment:
+      GITEA_INSTANCE_URL: http://gitea:3000
+      GITEA_RUNNER_REGISTRATION_TOKEN_FILE: /run/secrets/gitea_runner_token
+      GITEA_RUNNER_NAME: gcp-runner-1
+      GITEA_RUNNER_LABELS: ubuntu-latest,ubuntu-22.04,ubuntu-20.04
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID}
+      GCP_REGION: ${GCP_REGION}
+
+    secrets:
+      - gitea_runner_token
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - gitea_actions_cache:/data
+      - /home/gitea/.config/runner:/config:ro
+
+    networks:
+      - gitea_default
+
+    depends_on:
+      gitea:
+        condition: service_healthy
+
+    logging:
+      driver: gcplogs
+      options:
+        gcp-log-cmd: "true"
+        labels: "com.gitea.component"
+
+    privileged: true  # Required for Docker-in-Docker
+
+    labels:
+      - "com.gitea.component=runner"
+      - "com.gitea.tier=build"
+      - "com.cmmc.asset-category=SPC"
+      - "com.cmmc.control=SI.L2-3.14.1,CM.L2-3.4.2"
+      - "com.devsecops.stack=gitea"
+
+    deploy:
+      resources:
+        limits:
+          cpus: '6'
+          memory: 12G
+        reservations:
+          cpus: '2'
+          memory: 4G
+
+  # Caddy reverse proxy with automatic HTTPS
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy-gitea
+    restart: unless-stopped
+
+    environment:
+      GITEA_DOMAIN: ${GITEA_DOMAIN}
+      ACME_EMAIL: ${GITEA_ADMIN_EMAIL}
+
+    ports:
+      - "443:443"
+      - "80:80"
+
+    volumes:
+      - /home/gitea/.config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+    networks:
+      - gitea_default
+
+    depends_on:
+      - gitea
+
+    logging:
+      driver: gcplogs
+      options:
+        gcp-log-cmd: "true"
+        labels: "com.gitea.component"
+
+    labels:
+      - "com.gitea.component=proxy"
+      - "com.gitea.tier=edge"
+      - "com.cmmc.asset-category=SPA"
+      - "com.cmmc.control=SC.L2-3.13.8,SC.L2-3.13.11"
+      - "com.devsecops.stack=gitea"
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+# Docker secrets (populated from Secret Manager by startup script)
+secrets:
+  postgres_password:
+    file: /run/secrets/postgres_password
+  gitea_secret_key:
+    file: /run/secrets/gitea_secret_key
+  gitea_internal_token:
+    file: /run/secrets/gitea_internal_token
+  gitea_oauth2_jwt_secret:
+    file: /run/secrets/gitea_oauth2_jwt_secret
+  gitea_metrics_token:
+    file: /run/secrets/gitea_metrics_token
+  gitea_runner_token:
+    file: /run/secrets/gitea_runner_token
