@@ -1,0 +1,75 @@
+# Python Project Configuration
+# Dead Code Detection and Code Quality Settings
+
+[tool.vulture]
+# Vulture - Find dead Python code
+# https://github.com/jendrikseipp/vulture
+
+# Exclude patterns
+exclude = [
+    "*/.venv/*",
+    "*/venv/*",
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__pycache__/*",
+    "*/node_modules/*",
+    "*/.git/*",
+    "*/build/*",
+    "*/dist/*"
+]
+
+# Ignore specific names that might appear unused but are required
+ignore_names = [
+    "setUp",
+    "tearDown",
+    "setUpClass",
+    "tearDownClass",
+    "test_*",
+    "main",
+    "__init__",
+    "__main__",
+    "__enter__",
+    "__exit__",
+    "handle_*",  # Event handlers
+    "on_*",      # Callbacks
+    "*_handler", # Handler functions
+]
+
+# Minimum confidence level (0-100)
+# Higher values = fewer false positives but might miss some dead code
+min_confidence = 80
+
+# Ignore decorators (functions with these decorators won't be flagged)
+ignore_decorators = [
+    "@app.route",
+    "@app.before_request",
+    "@app.after_request",
+    "@pytest.fixture",
+    "@staticmethod",
+    "@classmethod"
+]
+
+# Sort output by confidence level
+sort_by_size = true
+
+[tool.pylint.messages_control]
+# PyLint dead code detection rules
+enable = [
+    "W0612",  # unused-variable
+    "W0611",  # unused-import
+    "W0613",  # unused-argument
+    "W0614",  # unused-wildcard-import
+]
+
+# Disable other checks when running dead code analysis
+disable = [
+    "C",  # Convention
+    "R",  # Refactoring
+    "E",  # Error (except dead code)
+]
+
+[tool.pylint.reports]
+output-format = "json"
+
+[tool.pylint.format]
+max-line-length = 120

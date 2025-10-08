@@ -17,6 +17,7 @@ allow if {
     dependency_compliance
     container_security
     infrastructure_compliance
+    within_dead_code_thresholds
 }
 
 # No hardcoded secrets (PO.5.2, PS.1.1)
@@ -76,6 +77,33 @@ meets_coverage_requirements if {
 }
 
 minimum_coverage_threshold := 80
+
+# Dead code detection thresholds (PW.6.1 - Code Review, PW.7.1 - Testing)
+within_dead_code_thresholds if {
+    python_dead_code_acceptable
+    javascript_dead_code_acceptable
+    shell_dead_code_acceptable
+    total_dead_code_acceptable
+}
+
+python_dead_code_acceptable if {
+    input.dead_code.python.total <= 20
+}
+
+javascript_dead_code_acceptable if {
+    input.dead_code.javascript.total <= 10
+}
+
+shell_dead_code_acceptable if {
+    input.dead_code.shell.total <= 15
+}
+
+total_dead_code_acceptable if {
+    total_dead_code := input.dead_code.python.total +
+                       input.dead_code.javascript.total +
+                       input.dead_code.shell.total
+    total_dead_code <= 50
+}
 
 # SAST finding thresholds (PW.7.1, PW.7.2)
 within_sast_thresholds if {
@@ -281,15 +309,43 @@ violations[msg] {
     msg := "Security rejected: Container must not run in privileged mode"
 }
 
-# Security score calculation
+violations[msg] {
+    not python_dead_code_acceptable
+    msg := sprintf("Security rejected: Python dead code (%d) exceeds threshold (20)",
+        [input.dead_code.python.total])
+}
+
+violations[msg] {
+    not javascript_dead_code_acceptable
+    msg := sprintf("Security rejected: JavaScript dead code (%d) exceeds threshold (10)",
+        [input.dead_code.javascript.total])
+}
+
+violations[msg] {
+    not shell_dead_code_acceptable
+    msg := sprintf("Security rejected: Shell dead code (%d) exceeds threshold (15)",
+        [input.dead_code.shell.total])
+}
+
+violations[msg] {
+    not total_dead_code_acceptable
+    total_dead_code := input.dead_code.python.total +
+                       input.dead_code.javascript.total +
+                       input.dead_code.shell.total
+    msg := sprintf("Security rejected: Total dead code (%d) exceeds threshold (50)",
+        [total_dead_code])
+}
+
+# Security score calculation (updated to include dead code - total = 100)
 security_score := score if {
     score := sum([
-        20 * no_hardcoded_secrets,
-        15 * meets_coverage_requirements,
+        15 * no_hardcoded_secrets,
+        10 * meets_coverage_requirements,
         20 * within_sast_thresholds,
         15 * dependency_compliance,
         15 * container_security,
-        15 * infrastructure_compliance
+        15 * infrastructure_compliance,
+        10 * within_dead_code_thresholds
     ])
 }
 
@@ -318,6 +374,24 @@ recommendations[action] {
 recommendations[action] {
     not container_uses_non_root_user
     action := "Configure container to run as non-root user"
+}
+
+recommendations[action] {
+    input.dead_code.python.total > 10
+    action := sprintf("Refactor Python code to remove %d dead code instances (Vulture/PyLint)",
+        [input.dead_code.python.total])
+}
+
+recommendations[action] {
+    input.dead_code.javascript.total > 5
+    action := sprintf("Clean up JavaScript code: remove %d unused variables/dependencies (ESLint/depcheck)",
+        [input.dead_code.javascript.total])
+}
+
+recommendations[action] {
+    input.dead_code.shell.total > 8
+    action := sprintf("Fix shell scripts: remove %d unused variables/unreachable code (ShellCheck)",
+        [input.dead_code.shell.total])
 }
 
 # Policy decision

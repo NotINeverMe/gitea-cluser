@@ -33,21 +33,20 @@ jobs:
           # Install Grype
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
 
-      - name: SonarQube Full Scan (PW.2.1)
+      - name: SonarQube Full Scan with Dead Code Detection (PW.2.1, PW.6.1)
         id: sonarqube
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          echo "::group::SonarQube Analysis"
+          echo "::group::SonarQube Analysis with Dead Code Detection"
           # Download and setup SonarScanner
           curl -o sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-4.8.0.2856-linux.zip
           unzip sonar-scanner.zip
           export PATH=$PATH:$(pwd)/sonar-scanner-4.8.0.2856-linux/bin
 
-          # Run analysis
+          # Run analysis using sonar-project.properties (includes dead code rules)
           sonar-scanner \
             -Dsonar.projectKey=${{ github.repository }} \
-            -Dsonar.sources=. \
             -Dsonar.host.url=${SONAR_HOST_URL} \
             -Dsonar.login=${SONAR_TOKEN} \
             -Dsonar.pullrequest.key=${{ github.event.pull_request.number }} \
@@ -60,13 +59,19 @@ jobs:
             "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${{ github.repository }}" \
             | jq -r '.projectStatus.status')
 
+          # Get dead code metrics
+          dead_code_issues=$(curl -s -u ${SONAR_TOKEN}: \
+            "${SONAR_HOST_URL}/api/issues/search?componentKeys=${{ github.repository }}&types=CODE_SMELL&tags=unused" \
+            | jq '.total')
+
           echo "sonar_status=${quality_gate}" >> $GITHUB_OUTPUT
+          echo "dead_code_issues=${dead_code_issues}" >> $GITHUB_OUTPUT
 
           if [ "${quality_gate}" = "ERROR" ]; then
-            echo "❌ SonarQube quality gate failed"
+            echo "❌ SonarQube quality gate failed (Dead code issues: ${dead_code_issues})"
             echo "quality_gate_failed=true" >> $GITHUB_OUTPUT
           else
-            echo "✅ SonarQube quality gate passed"
+            echo "✅ SonarQube quality gate passed (Dead code issues: ${dead_code_issues})"
             echo "quality_gate_failed=false" >> $GITHUB_OUTPUT
           fi
           echo "::endgroup::"
@@ -194,6 +199,94 @@ jobs:
           fi
           echo "::endgroup::"
 
+      - name: PyLint Dead Code Analysis (PW.6.1)
+        id: pylint
+        if: hashFiles('**/*.py') != ''
+        run: |
+          echo "::group::PyLint Dead Code Detection"
+          pip3 install pylint
+
+          # Run PyLint with dead code checks from pyproject.toml
+          pylint --rcfile=pyproject.toml \
+            --enable=W0612,W0611,W0613,W0614 \
+            --output-format=json \
+            --exit-zero \
+            . > pylint-results.json || true
+
+          # Count dead code violations
+          unused_vars=$(jq '[.[] | select(.message-id == "W0612")] | length' pylint-results.json)
+          unused_imports=$(jq '[.[] | select(.message-id == "W0611")] | length' pylint-results.json)
+          unused_args=$(jq '[.[] | select(.message-id == "W0613")] | length' pylint-results.json)
+          total_dead_code=$((unused_vars + unused_imports + unused_args))
+
+          echo "pylint_unused_vars=${unused_vars}" >> $GITHUB_OUTPUT
+          echo "pylint_unused_imports=${unused_imports}" >> $GITHUB_OUTPUT
+          echo "pylint_total_dead_code=${total_dead_code}" >> $GITHUB_OUTPUT
+
+          echo "📊 PyLint Dead Code Summary:"
+          echo "  - Unused variables: ${unused_vars}"
+          echo "  - Unused imports: ${unused_imports}"
+          echo "  - Unused arguments: ${unused_args}"
+          echo "  - Total: ${total_dead_code}"
+
+          # Fail if exceeds threshold (50 total dead code instances)
+          if [ "$total_dead_code" -gt 50 ]; then
+            echo "❌ CRITICAL: Found ${total_dead_code} dead code instances (threshold: 50)"
+            echo "pylint_failed=true" >> $GITHUB_OUTPUT
+            jq '[.[] | select(.message-id | IN("W0612", "W0611", "W0613"))] | .[] | {file: .path, line: .line, type: .symbol, message: .message}' pylint-results.json
+          else
+            echo "✅ PyLint passed with ${total_dead_code} dead code warnings"
+            echo "pylint_failed=false" >> $GITHUB_OUTPUT
+          fi
+          echo "::endgroup::"
+
+      - name: JavaScript Dependency Analysis (PW.6.1)
+        id: js-deps
+        if: hashFiles('**/package.json') != ''
+        run: |
+          echo "::group::JavaScript Dependency & Dead Code Analysis"
+
+          # Install analysis tools
+          npm install -g depcheck unimported
+
+          # Check for unused npm dependencies
+          echo "Running depcheck for unused dependencies..."
+          depcheck --json > depcheck-results.json || true
+
+          unused_deps=$(jq '.dependencies | length' depcheck-results.json)
+          unused_devdeps=$(jq '.devDependencies | length' depcheck-results.json)
+          total_unused_deps=$((unused_deps + unused_devdeps))
+
+          echo "depcheck_unused=${total_unused_deps}" >> $GITHUB_OUTPUT
+
+          echo "📊 Dependency Analysis:"
+          echo "  - Unused dependencies: ${unused_deps}"
+          echo "  - Unused devDependencies: ${unused_devdeps}"
+
+          # Check for unimported JavaScript files
+          echo "Running unimported for unreferenced files..."
+          unimported --flow=skip --init || true
+          unimported --flow=skip > unimported-results.txt || true
+
+          unimported_files=$(grep -c "unresolved imports" unimported-results.txt || echo "0")
+          echo "unimported_files=${unimported_files}" >> $GITHUB_OUTPUT
+          echo "  - Unimported files: ${unimported_files}"
+
+          total_js_waste=$((total_unused_deps + unimported_files))
+          echo "js_dead_code_total=${total_js_waste}" >> $GITHUB_OUTPUT
+
+          # Fail if exceeds threshold
+          if [ "$total_js_waste" -gt 20 ]; then
+            echo "❌ Found ${total_js_waste} unused dependencies/files (threshold: 20)"
+            echo "js_deps_failed=true" >> $GITHUB_OUTPUT
+            echo "Unused dependencies:"
+            jq '.dependencies' depcheck-results.json
+          else
+            echo "✅ JavaScript dependency check passed (${total_js_waste} issues)"
+            echo "js_deps_failed=false" >> $GITHUB_OUTPUT
+          fi
+          echo "::endgroup::"
+
       - name: Security Gate Decision (PW.6.2)
         id: gate-check
         run: |
@@ -227,6 +320,16 @@ jobs:
             reasons+=("Code coverage below threshold")
           fi
 
+          if [ "${{ steps.pylint.outputs.pylint_failed }}" = "true" ]; then
+            block_merge="true"
+            reasons+=("Excessive dead code detected (PyLint)")
+          fi
+
+          if [ "${{ steps.js-deps.outputs.js_deps_failed }}" = "true" ]; then
+            block_merge="true"
+            reasons+=("Excessive unused dependencies/files (JavaScript)")
+          fi
+
           echo "block_merge=${block_merge}" >> $GITHUB_OUTPUT
 
           if [ "$block_merge" = "true" ]; then
@@ -248,6 +351,11 @@ jobs:
           - **Code Coverage**: ${{ steps.coverage.outputs.coverage }}%
           - **License Violations**: ${{ steps.license.outputs.forbidden_licenses }}
 
+          ### Code Quality & Dead Code:
+          - **SonarQube Dead Code Issues**: ${{ steps.sonarqube.outputs.dead_code_issues }}
+          - **PyLint Dead Code**: ${{ steps.pylint.outputs.pylint_total_dead_code }}
+          - **JavaScript Unused Dependencies/Files**: ${{ steps.js-deps.outputs.js_dead_code_total }}
+
           Please fix these issues before merging.
           EOF
           else
@@ -264,6 +372,11 @@ jobs:
           - **Code Coverage**: ${{ steps.coverage.outputs.coverage }}%
           - **License Check**: All licenses compliant
           - **Quality Gate**: Passed
+
+          ### Code Quality & Dead Code:
+          - **SonarQube Dead Code Issues**: ${{ steps.sonarqube.outputs.dead_code_issues }}
+          - **PyLint Dead Code**: ${{ steps.pylint.outputs.pylint_total_dead_code }}
+          - **JavaScript Unused Dependencies/Files**: ${{ steps.js-deps.outputs.js_dead_code_total }}
 
           This PR is ready for review.
           EOF
@@ -306,7 +419,10 @@ jobs:
             "gate_decision": "${block_merge}",
             "ssdf_practices": ["PW.2.1", "PW.3.1", "PW.4.1", "PW.4.2", "PW.6.1", "PW.6.2", "PW.9.1"],
             "scan_results": {
-              "sonarqube": "${{ steps.sonarqube.outputs.sonar_status }}",
+              "sonarqube": {
+                "status": "${{ steps.sonarqube.outputs.sonar_status }}",
+                "dead_code_issues": "${{ steps.sonarqube.outputs.dead_code_issues }}"
+              },
               "trivy": {
                 "critical": "${{ steps.trivy.outputs.critical_vulns }}",
                 "high": "${{ steps.trivy.outputs.high_vulns }}"
@@ -316,7 +432,19 @@ jobs:
                 "passed": "${{ steps.checkov.outputs.checkov_passed }}"
               },
               "coverage": "${{ steps.coverage.outputs.coverage }}",
-              "license_violations": "${{ steps.license.outputs.forbidden_licenses }}"
+              "license_violations": "${{ steps.license.outputs.forbidden_licenses }}",
+              "dead_code_analysis": {
+                "pylint": {
+                  "unused_vars": "${{ steps.pylint.outputs.pylint_unused_vars }}",
+                  "unused_imports": "${{ steps.pylint.outputs.pylint_unused_imports }}",
+                  "total": "${{ steps.pylint.outputs.pylint_total_dead_code }}"
+                },
+                "javascript": {
+                  "unused_dependencies": "${{ steps.js-deps.outputs.depcheck_unused }}",
+                  "unimported_files": "${{ steps.js-deps.outputs.unimported_files }}",
+                  "total": "${{ steps.js-deps.outputs.js_dead_code_total }}"
+                }
+              }
             }
           }
           EOF

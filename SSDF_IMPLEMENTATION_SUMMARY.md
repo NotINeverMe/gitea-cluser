@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-Complete implementation of NIST Secure Software Development Framework (SSDF) SP 800-218 compliance through 7 Gitea Actions workflows, 3 OPA policies, and integration with 34 security tools from the CONTROL_MAPPING_MATRIX.
+Complete implementation of NIST Secure Software Development Framework (SSDF) SP 800-218 compliance through 7 Gitea Actions workflows, 3 OPA policies, and integration with 38+ security tools from the CONTROL_MAPPING_MATRIX, including comprehensive dead code detection.
 
 ## Deliverables Created
 
@@ -10,8 +10,8 @@ Complete implementation of NIST Secure Software Development Framework (SSDF) SP 
 
 | Workflow | File | SSDF Practices | Tools Used |
 |----------|------|----------------|------------|
-| Pre-Commit Security | `.gitea/workflows/pre-commit.yml` | PO.1.1, PO.3.2, PO.4.1, PS.1.1, PS.2.1 | git-secrets, Semgrep, Ansible-lint, Bandit, Safety |
-| PR Security Gate | `.gitea/workflows/pull-request.yml` | PW.2.1, PW.3.1, PW.4.1, PW.4.2, PW.6.1, PW.6.2, PW.9.1 | SonarQube, Trivy, Checkov, Grype, License-checker |
+| Pre-Commit Security | `.gitea/workflows/pre-commit.yml` | PO.1.1, PO.3.2, PO.4.1, PS.1.1, PS.2.1, **PW.6.1** | git-secrets, Semgrep, Ansible-lint, Bandit, Safety, **Vulture, ESLint, ShellCheck** |
+| PR Security Gate | `.gitea/workflows/pull-request.yml` | PW.2.1, PW.3.1, PW.4.1, PW.4.2, PW.6.1, PW.6.2, PW.9.1 | SonarQube, Trivy, Checkov, Grype, License-checker, **PyLint, depcheck, unimported** |
 | Secure Build & SBOM | `.gitea/workflows/build.yml` | PS.3.1-3.4, PW.9.2 | Syft, Cosign, SLSA Generator, Docker Buildx |
 | Security Scanning | `.gitea/workflows/security-scan.yml` | PW.7.1-7.3, RV.1.1-1.3 | Trivy, Grype, Bandit, Semgrep, tfsec, Terrascan, Checkov, KICS |
 | DAST | `.gitea/workflows/dast.yml` | PW.7.1-7.3, PW.9.1 | OWASP ZAP, Nuclei, testssl |
@@ -23,7 +23,7 @@ Complete implementation of NIST Secure Software Development Framework (SSDF) SP 
 | Policy | File | Purpose | Key Rules |
 |--------|------|---------|-----------|
 | Build Policy | `.gitea/policies/build-policy.rego` | Build security enforcement | Signed commits, SBOM generation, No critical CVEs, 2+ approvals, Base image validation |
-| Security Policy | `.gitea/policies/security-policy.rego` | Code security requirements | No secrets, 80% coverage, SAST thresholds, License compliance, Container security |
+| Security Policy | `.gitea/policies/security-policy.rego` | Code security requirements | No secrets, 80% coverage, SAST thresholds, License compliance, Container security, **Dead code thresholds (Python ≤20, JS ≤10, Shell ≤15, Total ≤50)** |
 | Compliance Policy | `.gitea/policies/compliance-policy.rego` | SSDF/CMMC compliance | 95% CMMC coverage, All 42 SSDF tasks, Evidence validation, Attestation checks |
 
 ### 3. Documentation
@@ -101,7 +101,7 @@ PW (Produce Well-Secured Software):
     - PW.5.1: ✅ security-scan.yml (validation checks)
 
   PW.6: Testing
-    - PW.6.1: ✅ pull-request.yml (security testing)
+    - PW.6.1: ✅ pull-request.yml (security testing) + **pre-commit.yml & pull-request.yml (dead code detection: Vulture, PyLint, ESLint, ShellCheck, depcheck, unimported)**
     - PW.6.2: ✅ pull-request.yml (coverage requirements)
 
   PW.7: Analysis
@@ -268,10 +268,16 @@ gs://ssdf-evidence-${GITEA_REPO_NAME}/
 - **Containers**: Ubuntu latest with security tools
 - **Permissions**: Read/write for artifacts
 
-### 2. Security Tool Stack (34 tools)
+### 2. Security Tool Stack (38+ tools)
 ```yaml
 SAST:
   - Semgrep, Bandit, SonarQube, Bearer, ESLint
+
+Dead Code Detection (NEW):
+  - Python: Vulture, PyLint
+  - JavaScript: ESLint (unused-imports), depcheck, unimported
+  - Shell: ShellCheck
+  - Multi-language: SonarQube (dead code rules)
 
 Container Security:
   - Trivy, Grype, Snyk, Clair, Syft
@@ -308,6 +314,7 @@ Compliance:
 - Git secrets scanning
 - Pre-commit hooks
 - PR security gates
+- **Dead code detection and elimination (PW.6.1 - multi-language)**
 - Base image validation
 - License compliance
 - Signed commits requirement
@@ -340,6 +347,7 @@ Compliance:
 
 ### 1. Shift-Left Security
 - Pre-commit scanning catches issues early
+- **Dead code detection prevents bloat and reduces attack surface**
 - PR gates prevent vulnerable code merge
 - Developer-friendly feedback in PR comments
 

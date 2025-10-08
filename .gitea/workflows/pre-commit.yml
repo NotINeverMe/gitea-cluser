@@ -136,6 +136,99 @@ jobs:
           fi
           echo "::endgroup::"
 
+      - name: Python Dead Code - Vulture (PW.6.1)
+        id: vulture
+        if: hashFiles('**/*.py') != ''
+        run: |
+          echo "::group::Vulture Dead Code Detection"
+          pip install vulture
+
+          # Run vulture with configuration from pyproject.toml
+          vulture . \
+            --min-confidence 80 \
+            --exclude "**/tests/*,**/test_*,**/.venv/*,**/venv/*" \
+            --ignore-names "setUp,tearDown,test_*,main,__init__" \
+            > vulture-results.txt || true
+
+          # Count findings
+          dead_code_count=$(grep -c "unused" vulture-results.txt || echo "0")
+          echo "vulture_dead_code=${dead_code_count}" >> $GITHUB_OUTPUT
+
+          # Save results as JSON for evidence
+          echo "{\"tool\":\"vulture\",\"dead_code_count\":${dead_code_count},\"threshold\":20}" > vulture-results.json
+
+          # Fail if too much dead code
+          if [ "$dead_code_count" -gt 20 ]; then
+            echo "❌ Found ${dead_code_count} instances of dead code (threshold: 20)"
+            cat vulture-results.txt
+            exit 1
+          fi
+
+          echo "✅ Vulture scan passed: ${dead_code_count} unused code instances found"
+          echo "::endgroup::"
+
+      - name: JavaScript Dead Code - ESLint (PW.6.1)
+        id: eslint
+        if: hashFiles('**/*.js') != ''
+        run: |
+          echo "::group::ESLint Unused Code Detection"
+          npm install -g eslint eslint-plugin-unused-imports
+
+          # Run ESLint with configuration from .eslintrc.json
+          eslint . --ext .js --format json --output-file eslint-results.json || true
+
+          # Count unused variables and imports
+          if [ -f eslint-results.json ]; then
+            unused_count=$(jq '[.[] | .messages[] | select(.ruleId == "no-unused-vars" or .ruleId == "unused-imports/no-unused-imports")] | length' eslint-results.json)
+          else
+            unused_count=0
+          fi
+
+          echo "eslint_unused=${unused_count}" >> $GITHUB_OUTPUT
+
+          if [ "$unused_count" -gt 10 ]; then
+            echo "❌ Found ${unused_count} unused variables/imports (threshold: 10)"
+            jq '[.[] | .messages[] | select(.ruleId == "no-unused-vars" or .ruleId == "unused-imports/no-unused-imports")] | .[] | {file: .filePath, line: .line, message: .message}' eslint-results.json
+            exit 1
+          fi
+
+          echo "✅ ESLint passed: ${unused_count} unused code warnings"
+          echo "::endgroup::"
+
+      - name: Shell Script Analysis - ShellCheck (PW.6.1)
+        id: shellcheck
+        if: hashFiles('**/*.sh') != ''
+        run: |
+          echo "::group::ShellCheck - Shell Script Quality & Dead Code"
+          # Install shellcheck
+          curl -Ls https://github.com/koalaman/shellcheck/releases/download/stable/shellcheck-stable.linux.x86_64.tar.xz | tar -xJv
+          sudo mv shellcheck-stable/shellcheck /usr/local/bin/
+
+          # Run shellcheck on all scripts
+          find . -name "*.sh" -not -path "*/.venv/*" -not -path "*/node_modules/*" -not -path "*/.git/*" | \
+            xargs shellcheck -f json > shellcheck-results.json || true
+
+          # Count unused variable warnings (SC2034) and unreachable code (SC2317)
+          if [ -f shellcheck-results.json ]; then
+            unused_vars=$(jq '[.[] | .comments[] | select(.code == 2034 or .code == 2317)] | length' shellcheck-results.json)
+            total_issues=$(jq '[.[] | .comments[]] | length' shellcheck-results.json)
+          else
+            unused_vars=0
+            total_issues=0
+          fi
+
+          echo "shellcheck_unused_vars=${unused_vars}" >> $GITHUB_OUTPUT
+          echo "shellcheck_total=${total_issues}" >> $GITHUB_OUTPUT
+
+          if [ "$unused_vars" -gt 15 ]; then
+            echo "❌ Found ${unused_vars} unused variables/unreachable code (threshold: 15)"
+            jq '[.[] | .comments[] | select(.code == 2034 or .code == 2317)] | .[] | {file: .file, line: .line, message: .message}' shellcheck-results.json
+            exit 1
+          fi
+
+          echo "✅ ShellCheck completed: ${unused_vars} unused variables, ${total_issues} total issues"
+          echo "::endgroup::"
+
       - name: Collect Evidence (PO.3.2)
         if: always()
         run: |
