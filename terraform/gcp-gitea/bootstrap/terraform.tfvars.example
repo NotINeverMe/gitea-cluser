@@ -1,0 +1,23 @@
+# Bootstrap Configuration Example
+# Copy this to terraform.tfvars and customize
+
+# GCP Project ID
+project_id = "vipr-dcg"
+
+# Region for resources
+region = "us-central1"
+
+# Environment (dev, staging, prod)
+environment = "prod"
+
+# KMS keyring location
+# Options: global, us-central1, us-east1, europe-west1, etc.
+kms_location = "us-central1"
+
+# GCS bucket location
+# Options: US (multi-region), EU (multi-region), ASIA (multi-region), or specific region
+bucket_location = "US"
+
+# Terraform service account email (leave empty if not created yet)
+# This will be created in main Terraform
+terraform_sa_email = ""

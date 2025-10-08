@@ -1,0 +1,25 @@
+# Terraform Backend Configuration
+#
+# This file is AUTO-GENERATED after running bootstrap
+# DO NOT manually create this file before bootstrap completes
+#
+# To generate this file:
+# 1. Run bootstrap: cd bootstrap && terraform apply
+# 2. Copy output values: terraform output backend_config
+# 3. Create backend.tf with the bucket name from output
+
+terraform {
+  backend "gcs" {
+    bucket = "REPLACE_WITH_BUCKET_NAME"  # Set by bootstrap output
+    prefix = "terraform/state"
+
+    # Encryption is handled by bucket's default KMS key
+    # State locking is handled by GCS versioning
+    # No credentials needed - uses Application Default Credentials
+  }
+}
+
+# After creating this file with correct bucket name:
+# terraform init -migrate-state  # Migrate from local to GCS
+# or
+# terraform init -reconfigure     # Fresh initialization
