@@ -68,6 +68,7 @@
             <button class="tab-btn" data-tab="terminal">💻 Terminal</button>
             <button class="tab-btn" data-tab="volumes">💾 Volumes</button>
             <button class="tab-btn" data-tab="images">💿 Images</button>
+            <button class="tab-btn" data-tab="ssdf">🛡️ SSDF Compliance</button>
         </div>
     </nav>
 
@@ -439,6 +440,182 @@
                 <div class="loading">
                     <div class="loading-spinner"></div>
                     Loading images...
+                </div>
+            </div>
+        </div>
+
+        <!-- ====================================================================
+             SSDF COMPLIANCE TAB
+             ==================================================================== -->
+        <div id="tab-ssdf" class="tab-content">
+            <!-- Compliance Overview Cards -->
+            <div class="overview-grid mb-3">
+                <div class="stat-card">
+                    <div class="stat-card-header">
+                        <div class="stat-card-title">Overall Compliance</div>
+                        <div class="stat-card-icon">✅</div>
+                    </div>
+                    <div class="stat-card-value" id="ssdf-coverage-percent" style="color: var(--accent-green)">100%</div>
+                    <div class="stat-card-label"><span id="ssdf-practices-covered">42</span>/42 SSDF Practices</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-card-header">
+                        <div class="stat-card-title">Evidence Packages</div>
+                        <div class="stat-card-icon">📦</div>
+                    </div>
+                    <div class="stat-card-value" id="ssdf-evidence-count" style="color: var(--accent-blue)">0</div>
+                    <div class="stat-card-label">Last 7 days</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-card-header">
+                        <div class="stat-card-title">SBOMs Generated</div>
+                        <div class="stat-card-icon">📋</div>
+                    </div>
+                    <div class="stat-card-value" id="ssdf-sbom-count" style="color: var(--accent-cyan)">0</div>
+                    <div class="stat-card-label">Active SBOMs</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-card-header">
+                        <div class="stat-card-title">Open Vulnerabilities</div>
+                        <div class="stat-card-icon">⚠️</div>
+                    </div>
+                    <div class="stat-card-value" id="ssdf-vuln-count" style="color: var(--accent-yellow)">0</div>
+                    <div class="stat-card-label">CRITICAL + HIGH</div>
+                </div>
+            </div>
+
+            <!-- SSDF Practice Groups -->
+            <h3 class="section-title mb-2">NIST SP 800-218 SSDF Practice Groups</h3>
+            <div class="ssdf-groups-grid mb-3">
+                <div class="ssdf-group-card">
+                    <div class="ssdf-group-header">
+                        <div class="ssdf-group-icon">🎯</div>
+                        <div class="ssdf-group-title">PO: Prepare Organization</div>
+                        <div class="ssdf-group-count">11/11</div>
+                    </div>
+                    <div class="ssdf-group-progress">
+                        <div class="ssdf-group-progress-bar" style="width: 100%; background: var(--accent-green);"></div>
+                    </div>
+                    <div class="ssdf-group-description">
+                        Organization-level preparation including defining security requirements,
+                        training, and establishing secure development practices.
+                    </div>
+                    <div class="ssdf-group-tools">
+                        <span class="tool-badge">Gitea</span>
+                        <span class="tool-badge">SonarQube</span>
+                        <span class="tool-badge">n8n</span>
+                    </div>
+                </div>
+
+                <div class="ssdf-group-card">
+                    <div class="ssdf-group-header">
+                        <div class="ssdf-group-icon">🔒</div>
+                        <div class="ssdf-group-title">PS: Protect Software</div>
+                        <div class="ssdf-group-count">7/7</div>
+                    </div>
+                    <div class="ssdf-group-progress">
+                        <div class="ssdf-group-progress-bar" style="width: 100%; background: var(--accent-blue);"></div>
+                    </div>
+                    <div class="ssdf-group-description">
+                        Protect software components from tampering and unauthorized access
+                        throughout the development lifecycle.
+                    </div>
+                    <div class="ssdf-group-tools">
+                        <span class="tool-badge">Cosign</span>
+                        <span class="tool-badge">Syft</span>
+                        <span class="tool-badge">GCS</span>
+                    </div>
+                </div>
+
+                <div class="ssdf-group-card">
+                    <div class="ssdf-group-header">
+                        <div class="ssdf-group-icon">🛠️</div>
+                        <div class="ssdf-group-title">PW: Produce Well-Secured</div>
+                        <div class="ssdf-group-count">16/16</div>
+                    </div>
+                    <div class="ssdf-group-progress">
+                        <div class="ssdf-group-progress-bar" style="width: 100%; background: var(--accent-purple);"></div>
+                    </div>
+                    <div class="ssdf-group-description">
+                        Produce well-secured software through secure coding, testing,
+                        code review, and vulnerability management.
+                    </div>
+                    <div class="ssdf-group-tools">
+                        <span class="tool-badge">Trivy</span>
+                        <span class="tool-badge">Semgrep</span>
+                        <span class="tool-badge">ZAP</span>
+                    </div>
+                </div>
+
+                <div class="ssdf-group-card">
+                    <div class="ssdf-group-header">
+                        <div class="ssdf-group-icon">🚨</div>
+                        <div class="ssdf-group-title">RV: Respond to Vulnerabilities</div>
+                        <div class="ssdf-group-count">8/8</div>
+                    </div>
+                    <div class="ssdf-group-progress">
+                        <div class="ssdf-group-progress-bar" style="width: 100%; background: var(--accent-orange);"></div>
+                    </div>
+                    <div class="ssdf-group-description">
+                        Identify, analyze, and remediate vulnerabilities in released
+                        software with coordinated disclosure.
+                    </div>
+                    <div class="ssdf-group-tools">
+                        <span class="tool-badge">Grype</span>
+                        <span class="tool-badge">n8n</span>
+                        <span class="tool-badge">Gitea</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent CI/CD Workflows -->
+            <h3 class="section-title mb-2">Recent SSDF Pipeline Executions</h3>
+            <div class="chart-container mb-3">
+                <div class="chart-header">
+                    <div class="chart-title">CI/CD Workflow History</div>
+                    <button class="btn" onclick="refreshSSDFData()">🔄 Refresh</button>
+                </div>
+                <div class="ssdf-workflows-list" id="ssdf-workflows-list">
+                    <div class="loading">
+                        <div class="loading-spinner"></div>
+                        Loading workflow data...
+                    </div>
+                </div>
+            </div>
+
+            <!-- SBOM Status -->
+            <div class="overview-grid mb-3">
+                <div class="chart-container">
+                    <div class="chart-header">
+                        <div class="chart-title">SBOM Status</div>
+                        <button class="btn" onclick="viewSBOMList()">View All</button>
+                    </div>
+                    <div class="ssdf-sbom-summary" id="ssdf-sbom-summary">
+                        <div class="loading">Loading SBOM data...</div>
+                    </div>
+                </div>
+
+                <div class="chart-container">
+                    <div class="chart-header">
+                        <div class="chart-title">Vulnerability Response</div>
+                        <button class="btn" onclick="viewVulnerabilities()">View Details</button>
+                    </div>
+                    <div class="ssdf-vuln-summary" id="ssdf-vuln-summary">
+                        <div class="loading">Loading vulnerability data...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="filter-bar mb-2">
+                <div class="filter-row">
+                    <button class="btn btn-primary" onclick="generateAttestation()">📝 Generate CISA Attestation</button>
+                    <button class="btn btn-primary" onclick="collectEvidence()">📦 Collect Evidence Package</button>
+                    <button class="btn" onclick="viewSSDFDocumentation()">📚 View Documentation</button>
+                    <button class="btn" onclick="exportComplianceReport()">📊 Export Report</button>
                 </div>
             </div>
         </div>

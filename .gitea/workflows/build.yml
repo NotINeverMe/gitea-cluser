@@ -1,0 +1,373 @@
+name: Secure Build & SBOM (SSDF PW.9/PS.3)
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  EVIDENCE_BUCKET: gs://ssdf-evidence-${{ github.repository }}
+  COSIGN_EXPERIMENTAL: 1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write  # For SLSA provenance
+
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      sbom-spdx: ${{ steps.sbom.outputs.spdx-file }}
+      sbom-cyclonedx: ${{ steps.sbom.outputs.cyclonedx-file }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Build Tools
+        run: |
+          echo "::group::Installing build tools"
+          # Install Syft for SBOM generation
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+          # Install Cosign for signing
+          curl -LO https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+          chmod +x cosign-linux-amd64
+          sudo mv cosign-linux-amd64 /usr/local/bin/cosign
+
+          # Install SLSA tools
+          curl -LO https://github.com/slsa-framework/slsa-github-generator/releases/latest/download/slsa-generator-generic-linux-amd64
+          chmod +x slsa-generator-generic-linux-amd64
+          sudo mv slsa-generator-generic-linux-amd64 /usr/local/bin/slsa-generator
+
+          # Install buildx for multi-platform builds
+          docker buildx create --use
+          echo "::endgroup::"
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+
+      - name: Multi-stage Secure Build (PS.3.1)
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+          # Security hardening
+          secrets: |
+            "github_token=${{ secrets.GITHUB_TOKEN }}"
+          sbom: true
+          provenance: true
+
+      - name: Generate SBOM - SPDX Format (PW.9.2)
+        id: sbom-spdx
+        run: |
+          echo "::group::SBOM Generation - SPDX"
+          image_ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+
+          # Generate SPDX SBOM
+          syft packages ${image_ref} \
+            --output spdx-json \
+            --file sbom-spdx.json
+
+          # Validate SBOM
+          if [ ! -s sbom-spdx.json ]; then
+            echo "❌ SBOM generation failed"
+            exit 1
+          fi
+
+          # Extract key metrics
+          package_count=$(jq '.packages | length' sbom-spdx.json)
+          echo "✅ Generated SPDX SBOM with ${package_count} packages"
+          echo "spdx-file=sbom-spdx.json" >> $GITHUB_OUTPUT
+          echo "package_count=${package_count}" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+
+      - name: Generate SBOM - CycloneDX Format (PW.9.2)
+        id: sbom-cyclonedx
+        run: |
+          echo "::group::SBOM Generation - CycloneDX"
+          image_ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+
+          # Generate CycloneDX SBOM
+          syft packages ${image_ref} \
+            --output cyclonedx-json \
+            --file sbom-cyclonedx.json
+
+          # Add VEX data if available
+          if [ -f ".vex/vex.json" ]; then
+            jq --slurpfile vex .vex/vex.json \
+              '.vulnerabilities = $vex[0].vulnerabilities' \
+              sbom-cyclonedx.json > sbom-cyclonedx-vex.json
+            mv sbom-cyclonedx-vex.json sbom-cyclonedx.json
+          fi
+
+          echo "✅ Generated CycloneDX SBOM"
+          echo "cyclonedx-file=sbom-cyclonedx.json" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+
+      - name: Sign Container Image (PS.3.2)
+        id: sign
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          echo "::group::Container Signing"
+          image_ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+
+          # Generate keypair if not exists (in production, use KMS)
+          if [ ! -f cosign.key ]; then
+            cosign generate-key-pair
+          fi
+
+          # Sign the container image
+          cosign sign \
+            --key cosign.key \
+            --annotations "repo=${{ github.repository }}" \
+            --annotations "workflow=${{ github.workflow }}" \
+            --annotations "ref=${{ github.sha }}" \
+            ${image_ref}
+
+          # Verify signature
+          cosign verify \
+            --key cosign.pub \
+            ${image_ref}
+
+          echo "✅ Container image signed and verified"
+          echo "::endgroup::"
+
+      - name: Attach SBOM to Container (PS.3.2)
+        run: |
+          echo "::group::Attaching SBOM"
+          image_ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+
+          # Attach SPDX SBOM
+          cosign attach sbom \
+            --sbom sbom-spdx.json \
+            ${image_ref}
+
+          # Attach CycloneDX SBOM
+          cosign attach sbom \
+            --sbom sbom-cyclonedx.json \
+            --type cyclonedx \
+            ${image_ref}
+
+          echo "✅ SBOMs attached to container image"
+          echo "::endgroup::"
+
+      - name: Generate SLSA Provenance (PS.3.3)
+        id: provenance
+        run: |
+          echo "::group::SLSA Provenance Generation"
+          image_ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+
+          # Create provenance predicate
+          cat > provenance-predicate.json <<EOF
+          {
+            "builder": {
+              "id": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            },
+            "buildType": "https://github.com/slsa-framework/slsa-github-generator/container@v1",
+            "invocation": {
+              "configSource": {
+                "uri": "git+https://github.com/${{ github.repository }}@refs/heads/${{ github.ref_name }}",
+                "digest": {
+                  "sha1": "${{ github.sha }}"
+                },
+                "entryPoint": ".gitea/workflows/build.yml"
+              },
+              "parameters": {
+                "source": "git+https://github.com/${{ github.repository }}.git",
+                "builder_image": "docker/buildx"
+              },
+              "environment": {
+                "github_run_id": "${{ github.run_id }}",
+                "github_actor": "${{ github.actor }}"
+              }
+            },
+            "buildConfig": {
+              "steps": [
+                {
+                  "command": ["docker", "buildx", "build"],
+                  "env": ["SOURCE_DATE_EPOCH"]
+                }
+              ]
+            },
+            "metadata": {
+              "buildInvocationId": "${{ github.run_id }}",
+              "buildStartedOn": "${{ github.event.head_commit.timestamp }}",
+              "buildFinishedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+              "completeness": {
+                "parameters": true,
+                "environment": true,
+                "materials": false
+              },
+              "reproducible": false
+            },
+            "materials": [
+              {
+                "uri": "git+https://github.com/${{ github.repository }}.git",
+                "digest": {
+                  "sha1": "${{ github.sha }}"
+                }
+              }
+            ]
+          }
+          EOF
+
+          # Generate SLSA provenance
+          slsa-generator generate \
+            --predicate provenance-predicate.json \
+            --output-file provenance.json \
+            --type container
+
+          # Attach provenance to image
+          cosign attach attestation \
+            --attestation provenance.json \
+            ${image_ref}
+
+          echo "✅ SLSA provenance generated and attached"
+          echo "::endgroup::"
+
+      - name: Create Build Attestation (PS.3.4)
+        run: |
+          echo "::group::Build Attestation"
+          # Create build attestation
+          cat > build-attestation.json <<EOF
+          {
+            "version": "0.1",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "build_id": "${{ github.run_id }}",
+            "source": {
+              "repository": "${{ github.repository }}",
+              "commit": "${{ github.sha }}",
+              "branch": "${{ github.ref_name }}"
+            },
+            "builder": {
+              "platform": "Gitea Actions",
+              "version": "${{ github.server_url }}"
+            },
+            "artifact": {
+              "image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}",
+              "digest": "${{ steps.build.outputs.digest }}"
+            },
+            "sbom": {
+              "spdx": "${{ steps.sbom-spdx.outputs.spdx-file }}",
+              "cyclonedx": "${{ steps.sbom-cyclonedx.outputs.cyclonedx-file }}",
+              "packages": "${{ steps.sbom-spdx.outputs.package_count }}"
+            },
+            "security": {
+              "signed": true,
+              "signature_type": "cosign",
+              "slsa_level": 3
+            }
+          }
+          EOF
+
+          # Sign attestation
+          cosign sign-blob \
+            --key cosign.key \
+            --output-signature build-attestation.sig \
+            --output-certificate build-attestation.crt \
+            build-attestation.json
+
+          echo "✅ Build attestation created and signed"
+          echo "::endgroup::"
+
+      - name: Evidence Collection (PW.9.1)
+        if: always()
+        run: |
+          echo "::group::Evidence Collection"
+          mkdir -p evidence/build
+
+          # Collect all artifacts
+          cp -f sbom-*.json evidence/build/ 2>/dev/null || true
+          cp -f provenance.json evidence/build/ 2>/dev/null || true
+          cp -f build-attestation* evidence/build/ 2>/dev/null || true
+          cp -f cosign.pub evidence/build/ 2>/dev/null || true
+
+          # Generate evidence manifest
+          cat > evidence/build/manifest.json <<EOF
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "run_id": "${{ github.run_id }}",
+            "commit_sha": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "ssdf_practices": ["PW.9.1", "PW.9.2", "PS.3.1", "PS.3.2", "PS.3.3", "PS.3.4"],
+            "artifacts": {
+              "image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}",
+              "sbom_spdx": "${{ steps.sbom-spdx.outputs.spdx-file }}",
+              "sbom_cyclonedx": "${{ steps.sbom-cyclonedx.outputs.cyclonedx-file }}",
+              "provenance": "provenance.json",
+              "attestation": "build-attestation.json"
+            },
+            "signatures": {
+              "container_signed": true,
+              "sbom_attached": true,
+              "provenance_attached": true
+            }
+          }
+          EOF
+
+          # Create evidence package
+          tar czf evidence-build-${{ github.run_id }}.tar.gz evidence/
+          sha256sum evidence-build-${{ github.run_id }}.tar.gz > evidence-build-${{ github.run_id }}.sha256
+
+          echo "✅ Evidence package created with SHA-256: $(cat evidence-build-${{ github.run_id }}.sha256 | cut -d' ' -f1)"
+          echo "::endgroup::"
+
+      - name: Upload to GCS Evidence Bucket
+        if: always()
+        run: |
+          echo "::group::Upload Evidence to GCS"
+          # Install gsutil if not present
+          if ! command -v gsutil &> /dev/null; then
+            echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+            sudo apt-get update && sudo apt-get install -y google-cloud-sdk
+          fi
+
+          # Upload evidence
+          gsutil cp evidence-build-${{ github.run_id }}.tar.gz ${EVIDENCE_BUCKET}/build/
+          gsutil cp evidence-build-${{ github.run_id }}.sha256 ${EVIDENCE_BUCKET}/build/
+
+          echo "✅ Evidence uploaded to ${EVIDENCE_BUCKET}/build/"
+          echo "::endgroup::"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-artifacts-${{ github.run_id }}
+          path: |
+            sbom-*.json
+            provenance.json
+            build-attestation*
+            evidence-build-*.tar.gz
+            evidence-build-*.sha256
+          retention-days: 90

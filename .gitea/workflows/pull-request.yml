@@ -1,0 +1,343 @@
+name: PR Security Gate (SSDF PW.2/PW.6)
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  COVERAGE_THRESHOLD: 80
+  SONAR_HOST_URL: http://sonarqube:9000
+  EVIDENCE_BUCKET: gs://ssdf-evidence-${{ github.repository }}
+
+jobs:
+  sast-scan:
+    runs-on: ubuntu-latest
+    outputs:
+      block_merge: ${{ steps.gate-check.outputs.block_merge }}
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for SonarQube
+
+      - name: Setup Security Tools
+        run: |
+          # Install required tools
+          apt-get update && apt-get install -y python3-pip nodejs npm curl jq
+          pip3 install checkov terrascan tfsec
+          npm install -g license-checker snyk
+
+          # Install Trivy
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+          # Install Grype
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: SonarQube Full Scan (PW.2.1)
+        id: sonarqube
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          echo "::group::SonarQube Analysis"
+          # Download and setup SonarScanner
+          curl -o sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-4.8.0.2856-linux.zip
+          unzip sonar-scanner.zip
+          export PATH=$PATH:$(pwd)/sonar-scanner-4.8.0.2856-linux/bin
+
+          # Run analysis
+          sonar-scanner \
+            -Dsonar.projectKey=${{ github.repository }} \
+            -Dsonar.sources=. \
+            -Dsonar.host.url=${SONAR_HOST_URL} \
+            -Dsonar.login=${SONAR_TOKEN} \
+            -Dsonar.pullrequest.key=${{ github.event.pull_request.number }} \
+            -Dsonar.pullrequest.branch=${{ github.head_ref }} \
+            -Dsonar.pullrequest.base=${{ github.base_ref }} || true
+
+          # Check quality gate status
+          sleep 10
+          quality_gate=$(curl -s -u ${SONAR_TOKEN}: \
+            "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${{ github.repository }}" \
+            | jq -r '.projectStatus.status')
+
+          echo "sonar_status=${quality_gate}" >> $GITHUB_OUTPUT
+
+          if [ "${quality_gate}" = "ERROR" ]; then
+            echo "❌ SonarQube quality gate failed"
+            echo "quality_gate_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ SonarQube quality gate passed"
+            echo "quality_gate_failed=false" >> $GITHUB_OUTPUT
+          fi
+          echo "::endgroup::"
+
+      - name: Trivy Dependency Scan (PW.4.1)
+        id: trivy
+        run: |
+          echo "::group::Trivy Vulnerability Scan"
+          # Scan filesystem
+          trivy fs . \
+            --format json \
+            --output trivy-results.json \
+            --severity CRITICAL,HIGH,MEDIUM \
+            --exit-code 0
+
+          # Parse results
+          critical_vulns=$(jq '[.Results[].Vulnerabilities[] | select(.Severity == "CRITICAL")] | length' trivy-results.json)
+          high_vulns=$(jq '[.Results[].Vulnerabilities[] | select(.Severity == "HIGH")] | length' trivy-results.json)
+
+          echo "critical_vulns=${critical_vulns}" >> $GITHUB_OUTPUT
+          echo "high_vulns=${high_vulns}" >> $GITHUB_OUTPUT
+
+          if [ "$critical_vulns" -gt 0 ]; then
+            echo "❌ CRITICAL: Found ${critical_vulns} critical vulnerabilities"
+            jq '.Results[].Vulnerabilities[] | select(.Severity == "CRITICAL") | {PkgName, InstalledVersion, FixedVersion, Title, Severity}' trivy-results.json
+            echo "has_critical=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_critical=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "📊 Vulnerability Summary:"
+          echo "  - Critical: ${critical_vulns}"
+          echo "  - High: ${high_vulns}"
+          echo "::endgroup::"
+
+      - name: Checkov IaC Scan (PW.4.2)
+        id: checkov
+        run: |
+          echo "::group::Checkov Infrastructure Scan"
+          checkov -d . \
+            --framework all \
+            --output json \
+            --output-file-path checkov-results.json \
+            --soft-fail || true
+
+          # Parse results
+          failed_checks=$(jq '.summary.failed' checkov-results.json)
+          passed_checks=$(jq '.summary.passed' checkov-results.json)
+          skipped_checks=$(jq '.summary.skipped' checkov-results.json)
+
+          echo "checkov_failed=${failed_checks}" >> $GITHUB_OUTPUT
+          echo "checkov_passed=${passed_checks}" >> $GITHUB_OUTPUT
+
+          compliance_rate=$((passed_checks * 100 / (passed_checks + failed_checks + 1)))
+          echo "compliance_rate=${compliance_rate}" >> $GITHUB_OUTPUT
+
+          if [ "$failed_checks" -gt 20 ]; then
+            echo "❌ Too many IaC policy violations: ${failed_checks}"
+            echo "iac_blocked=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ IaC compliance rate: ${compliance_rate}%"
+            echo "iac_blocked=false" >> $GITHUB_OUTPUT
+          fi
+          echo "::endgroup::"
+
+      - name: License Compliance Check (PW.3.1)
+        id: license
+        run: |
+          echo "::group::License Compliance"
+          # Define allowed licenses
+          cat > allowed-licenses.json <<EOF
+          {
+            "allowed": ["MIT", "Apache-2.0", "BSD-3-Clause", "BSD-2-Clause", "ISC", "MPL-2.0"],
+            "forbidden": ["GPL-3.0", "AGPL-3.0", "LGPL-3.0", "CC-BY-NC"]
+          }
+          EOF
+
+          # Check Node.js licenses
+          if [ -f "package.json" ]; then
+            license-checker --json --out license-report.json || true
+
+            # Check for forbidden licenses
+            forbidden_count=0
+            for license in $(jq -r '.forbidden[]' allowed-licenses.json); do
+              count=$(jq --arg lic "$license" '[.[] | select(.licenses == $lic)] | length' license-report.json)
+              forbidden_count=$((forbidden_count + count))
+            done
+
+            echo "forbidden_licenses=${forbidden_count}" >> $GITHUB_OUTPUT
+
+            if [ "$forbidden_count" -gt 0 ]; then
+              echo "❌ Found ${forbidden_count} packages with forbidden licenses"
+              echo "license_violation=true" >> $GITHUB_OUTPUT
+            else
+              echo "✅ All licenses compliant"
+              echo "license_violation=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+          echo "::endgroup::"
+
+      - name: Code Coverage Check (PW.6.1)
+        id: coverage
+        run: |
+          echo "::group::Code Coverage Analysis"
+          # Run tests with coverage
+          if [ -f "package.json" ]; then
+            npm test -- --coverage --coverageReporters=json || true
+            coverage=$(jq '.total.lines.pct' coverage/coverage-summary.json)
+          elif [ -f "requirements.txt" ]; then
+            pip3 install pytest pytest-cov
+            pytest --cov=. --cov-report=json || true
+            coverage=$(jq '.totals.percent_covered' coverage.json)
+          else
+            coverage=0
+          fi
+
+          echo "coverage=${coverage}" >> $GITHUB_OUTPUT
+
+          if (( $(echo "$coverage < $COVERAGE_THRESHOLD" | bc -l) )); then
+            echo "❌ Code coverage ${coverage}% below threshold ${COVERAGE_THRESHOLD}%"
+            echo "coverage_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Code coverage ${coverage}% meets threshold"
+            echo "coverage_failed=false" >> $GITHUB_OUTPUT
+          fi
+          echo "::endgroup::"
+
+      - name: Security Gate Decision (PW.6.2)
+        id: gate-check
+        run: |
+          echo "::group::Security Gate Evaluation"
+          block_merge="false"
+          reasons=()
+
+          # Check each gate condition
+          if [ "${{ steps.trivy.outputs.has_critical }}" = "true" ]; then
+            block_merge="true"
+            reasons+=("CRITICAL vulnerabilities found")
+          fi
+
+          if [ "${{ steps.sonarqube.outputs.quality_gate_failed }}" = "true" ]; then
+            block_merge="true"
+            reasons+=("SonarQube quality gate failed")
+          fi
+
+          if [ "${{ steps.checkov.outputs.iac_blocked }}" = "true" ]; then
+            block_merge="true"
+            reasons+=("Too many IaC policy violations")
+          fi
+
+          if [ "${{ steps.license.outputs.license_violation }}" = "true" ]; then
+            block_merge="true"
+            reasons+=("Forbidden licenses detected")
+          fi
+
+          if [ "${{ steps.coverage.outputs.coverage_failed }}" = "true" ]; then
+            block_merge="true"
+            reasons+=("Code coverage below threshold")
+          fi
+
+          echo "block_merge=${block_merge}" >> $GITHUB_OUTPUT
+
+          if [ "$block_merge" = "true" ]; then
+            echo "❌ PR BLOCKED - Security gates failed:"
+            printf '%s\n' "${reasons[@]}"
+
+            # Create PR comment
+            cat > pr-comment.md <<EOF
+          ## 🚫 Security Gate Failed
+
+          This PR cannot be merged due to the following security issues:
+
+          $(printf '- %s\n' "${reasons[@]}")
+
+          ### Security Scan Results:
+          - **Critical Vulnerabilities**: ${{ steps.trivy.outputs.critical_vulns }}
+          - **High Vulnerabilities**: ${{ steps.trivy.outputs.high_vulns }}
+          - **IaC Failed Checks**: ${{ steps.checkov.outputs.checkov_failed }}
+          - **Code Coverage**: ${{ steps.coverage.outputs.coverage }}%
+          - **License Violations**: ${{ steps.license.outputs.forbidden_licenses }}
+
+          Please fix these issues before merging.
+          EOF
+          else
+            echo "✅ All security gates passed"
+
+            cat > pr-comment.md <<EOF
+          ## ✅ Security Gate Passed
+
+          All security checks have passed successfully.
+
+          ### Security Scan Results:
+          - **Vulnerabilities**: No critical issues found
+          - **IaC Compliance**: ${{ steps.checkov.outputs.compliance_rate }}%
+          - **Code Coverage**: ${{ steps.coverage.outputs.coverage }}%
+          - **License Check**: All licenses compliant
+          - **Quality Gate**: Passed
+
+          This PR is ready for review.
+          EOF
+          fi
+          echo "::endgroup::"
+
+      - name: Post PR Comment
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const comment = fs.readFileSync('pr-comment.md', 'utf8');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+      - name: Collect Evidence (PW.9.1)
+        if: always()
+        run: |
+          echo "::group::Evidence Collection"
+          mkdir -p evidence/pr-gate
+
+          # Collect all scan results
+          cp -f *-results.json evidence/pr-gate/ 2>/dev/null || true
+          cp -f pr-comment.md evidence/pr-gate/ 2>/dev/null || true
+
+          # Generate evidence manifest
+          cat > evidence/pr-gate/manifest.json <<EOF
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "pr_number": "${{ github.event.pull_request.number }}",
+            "head_sha": "${{ github.sha }}",
+            "base_branch": "${{ github.base_ref }}",
+            "head_branch": "${{ github.head_ref }}",
+            "gate_decision": "${block_merge}",
+            "ssdf_practices": ["PW.2.1", "PW.3.1", "PW.4.1", "PW.4.2", "PW.6.1", "PW.6.2", "PW.9.1"],
+            "scan_results": {
+              "sonarqube": "${{ steps.sonarqube.outputs.sonar_status }}",
+              "trivy": {
+                "critical": "${{ steps.trivy.outputs.critical_vulns }}",
+                "high": "${{ steps.trivy.outputs.high_vulns }}"
+              },
+              "checkov": {
+                "failed": "${{ steps.checkov.outputs.checkov_failed }}",
+                "passed": "${{ steps.checkov.outputs.checkov_passed }}"
+              },
+              "coverage": "${{ steps.coverage.outputs.coverage }}",
+              "license_violations": "${{ steps.license.outputs.forbidden_licenses }}"
+            }
+          }
+          EOF
+
+          # Create evidence package
+          tar czf evidence-pr-${{ github.event.pull_request.number }}-${{ github.run_id }}.tar.gz evidence/
+          sha256sum evidence-pr-${{ github.event.pull_request.number }}-${{ github.run_id }}.tar.gz > evidence-pr-${{ github.event.pull_request.number }}-${{ github.run_id }}.sha256
+          echo "::endgroup::"
+
+      - name: Upload Evidence
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: pr-gate-evidence-${{ github.run_id }}
+          path: |
+            evidence-pr-*.tar.gz
+            evidence-pr-*.sha256
+          retention-days: 90
+
+      - name: Block Merge if Failed
+        if: steps.gate-check.outputs.block_merge == 'true'
+        run: |
+          echo "❌ Blocking PR merge due to security gate failures"
+          exit 1

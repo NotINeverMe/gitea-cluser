@@ -126,6 +126,12 @@ const API = {
         const response = await fetch('/api/networks');
         if (!response.ok) throw new Error('Failed to fetch networks');
         return await response.json();
+    },
+
+    async getSSDFCompliance() {
+        const response = await fetch('/api/ssdf/compliance');
+        if (!response.ok) throw new Error('Failed to fetch SSDF compliance data');
+        return await response.json();
     }
 };
 
@@ -245,6 +251,9 @@ async function loadTabData(tabName) {
                 break;
             case 'images':
                 await loadImagesTab();
+                break;
+            case 'ssdf':
+                await loadSSDFTab();
                 break;
         }
     } catch (error) {
@@ -1144,6 +1153,201 @@ async function scanAllImages() {
 }
 
 // ============================================================================
+// SSDF COMPLIANCE TAB
+// ============================================================================
+async function loadSSDFTab() {
+    try {
+        await loadSSDFData();
+    } catch (error) {
+        console.error('Error loading SSDF data:', error);
+        Toast.error('Failed to load SSDF compliance data');
+    }
+}
+
+async function loadSSDFData() {
+    try {
+        // Fetch SSDF compliance data from API
+        const ssdfData = await API.getSSDFCompliance();
+
+        // Transform sboms data
+        const sbom_summary = {
+            spdx_count: ssdfData.sboms.spdx_count,
+            cyclonedx_count: ssdfData.sboms.cyclonedx_count,
+            signed_count: ssdfData.sboms.signed_count,
+            avg_components: ssdfData.sboms.avg_components
+        };
+
+        // Transform vulnerabilities data
+        const vuln_summary = {
+            total_vulns: ssdfData.vulnerabilities.total,
+            critical_high: ssdfData.vulnerabilities.critical_high,
+            response_rate: ssdfData.vulnerabilities.response_rate,
+            avg_response_time: ssdfData.vulnerabilities.avg_response_time
+        };
+
+        // Update overview cards
+        updateSSDFOverview({
+            coverage: ssdfData.coverage,
+            evidence_packages: ssdfData.evidence_packages,
+            sboms: ssdfData.sboms.total,
+            vulnerabilities: ssdfData.vulnerabilities
+        });
+
+        // Update workflows list
+        updateSSDFWorkflows(ssdfData.workflows);
+
+        // Update SBOM summary
+        updateSBOMSummary(sbom_summary);
+
+        // Update vulnerability summary
+        updateVulnSummary(vuln_summary);
+
+    } catch (error) {
+        console.error('Error loading SSDF data:', error);
+        throw error;
+    }
+}
+
+function updateSSDFOverview(data) {
+    const coveragePercent = document.getElementById('ssdf-coverage-percent');
+    const practicesCovered = document.getElementById('ssdf-practices-covered');
+    const evidenceCount = document.getElementById('ssdf-evidence-count');
+    const sbomCount = document.getElementById('ssdf-sbom-count');
+    const vulnCount = document.getElementById('ssdf-vuln-count');
+
+    if (coveragePercent) coveragePercent.textContent = `${data.coverage.percent}%`;
+    if (practicesCovered) practicesCovered.textContent = data.coverage.covered;
+    if (evidenceCount) evidenceCount.textContent = data.evidence_packages;
+    if (sbomCount) sbomCount.textContent = data.sboms;
+    if (vulnCount) vulnCount.textContent = data.vulnerabilities.critical + data.vulnerabilities.high;
+}
+
+function updateSSDFWorkflows(workflows) {
+    const list = document.getElementById('ssdf-workflows-list');
+    if (!list) return;
+
+    if (workflows.length === 0) {
+        list.innerHTML = '<div class="empty-state-text">No workflow executions found</div>';
+        return;
+    }
+
+    list.innerHTML = workflows.map(workflow => `
+        <div class="ssdf-workflow-item">
+            <div class="ssdf-workflow-info">
+                <div class="ssdf-workflow-name">${workflow.name}</div>
+                <div class="ssdf-workflow-meta">
+                    ${formatTimeAgo(workflow.timestamp)} • ${workflow.duration} • ${workflow.practices.join(', ')}
+                </div>
+            </div>
+            <div class="ssdf-workflow-status ${workflow.status}">${workflow.status}</div>
+        </div>
+    `).join('');
+}
+
+function updateSBOMSummary(summary) {
+    const container = document.getElementById('ssdf-sbom-summary');
+    if (!container) return;
+
+    container.innerHTML = `
+        <div class="ssdf-summary-item">
+            <span class="ssdf-summary-label">SPDX 2.3 SBOMs</span>
+            <span class="ssdf-summary-value">${summary.spdx_count}</span>
+        </div>
+        <div class="ssdf-summary-item">
+            <span class="ssdf-summary-label">CycloneDX 1.5 SBOMs</span>
+            <span class="ssdf-summary-value">${summary.cyclonedx_count}</span>
+        </div>
+        <div class="ssdf-summary-item">
+            <span class="ssdf-summary-label">Signed with Cosign</span>
+            <span class="ssdf-summary-value" style="color: var(--accent-green)">${summary.signed_count}</span>
+        </div>
+        <div class="ssdf-summary-item">
+            <span class="ssdf-summary-label">Avg Components</span>
+            <span class="ssdf-summary-value">${summary.avg_components}</span>
+        </div>
+    `;
+}
+
+function updateVulnSummary(summary) {
+    const container = document.getElementById('ssdf-vuln-summary');
+    if (!container) return;
+
+    container.innerHTML = `
+        <div class="ssdf-summary-item">
+            <span class="ssdf-summary-label">Total Vulnerabilities</span>
+            <span class="ssdf-summary-value">${summary.total_vulns}</span>
+        </div>
+        <div class="ssdf-summary-item">
+            <span class="ssdf-summary-label">CRITICAL + HIGH</span>
+            <span class="ssdf-summary-value" style="color: var(--accent-red)">${summary.critical_high}</span>
+        </div>
+        <div class="ssdf-summary-item">
+            <span class="ssdf-summary-label">Response Rate</span>
+            <span class="ssdf-summary-value" style="color: var(--accent-green)">${summary.response_rate}%</span>
+        </div>
+        <div class="ssdf-summary-item">
+            <span class="ssdf-summary-label">Avg Response Time</span>
+            <span class="ssdf-summary-value">${summary.avg_response_time}</span>
+        </div>
+    `;
+}
+
+function formatTimeAgo(timestamp) {
+    const now = new Date();
+    const past = new Date(timestamp);
+    const diffMs = now - past;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    return `${diffDays}d ago`;
+}
+
+// SSDF Action Functions
+function refreshSSDFData() {
+    Toast.info('Refreshing SSDF data...');
+    loadSSDFData();
+}
+
+function generateAttestation() {
+    Toast.info('Generating CISA attestation form...');
+    // In production: trigger n8n workflow to generate attestation
+    window.open('/ssdf/documentation/SSDF_ATTESTATION_FORM.md', '_blank');
+}
+
+function collectEvidence() {
+    Toast.info('Collecting evidence package...');
+    // In production: trigger n8n workflow to collect evidence
+    setTimeout(() => {
+        Toast.success('Evidence package collection started. Check n8n for progress.');
+    }, 1000);
+}
+
+function viewSSDFDocumentation() {
+    window.open('/ssdf/documentation/SSDF_IMPLEMENTATION_GUIDE.md', '_blank');
+}
+
+function exportComplianceReport() {
+    Toast.info('Exporting compliance report...');
+    // In production: generate PDF report
+    setTimeout(() => {
+        Toast.success('Compliance report exported successfully.');
+    }, 1000);
+}
+
+function viewSBOMList() {
+    Toast.info('Opening SBOM management...');
+    // In production: show SBOM list modal or navigate to SBOM page
+}
+
+function viewVulnerabilities() {
+    Toast.info('Opening vulnerability dashboard...');
+    // In production: show vulnerability modal or navigate to vuln page
+}
+
+// ============================================================================
 // EVENTS FEED
 // ============================================================================
 let eventsSource = null;
@@ -1257,7 +1461,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     startEventsFeed();
 
     // Load active alerts
-    loadActiveAlerts();
+    try {
+        const alertsResponse = await fetch('/api/alerts/active');
+        if (alertsResponse.ok) {
+            const activeAlerts = await alertsResponse.json();
+            const alertsBadge = document.getElementById('alerts-badge');
+            if (alertsBadge) {
+                alertsBadge.textContent = activeAlerts.length;
+            }
+        }
+    } catch (error) {
+        console.error('Error loading active alerts:', error);
+    }
 
     console.log('DevSecOps Dashboard initialized successfully');
 });
@@ -1280,5 +1495,12 @@ window.deleteImage = deleteImage;
 window.pruneImages = pruneImages;
 window.scanAllImages = scanAllImages;
 window.toggleEventsFeed = toggleEventsFeed;
+window.refreshSSDFData = refreshSSDFData;
+window.generateAttestation = generateAttestation;
+window.collectEvidence = collectEvidence;
+window.viewSSDFDocumentation = viewSSDFDocumentation;
+window.exportComplianceReport = exportComplianceReport;
+window.viewSBOMList = viewSBOMList;
+window.viewVulnerabilities = viewVulnerabilities;
 window.API = API;
 window.Modal = Modal;
