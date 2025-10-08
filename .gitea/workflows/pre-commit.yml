@@ -6,8 +6,8 @@ on:
     types: [opened, synchronize]
 
 env:
-  EVIDENCE_BUCKET: gs://ssdf-evidence-${GITEA_REPO_NAME}
-  EVIDENCE_PREFIX: pre-commit/${GITEA_RUN_ID}
+  EVIDENCE_BUCKET: gs://ssdf-evidence-${{ github.repository }}
+  EVIDENCE_PREFIX: pre-commit/${{ github.run_id }}
 
 jobs:
   security-scan:
@@ -149,9 +149,9 @@ jobs:
           cat > evidence/pre-commit/manifest.json <<EOF
           {
             "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "run_id": "${GITEA_RUN_ID}",
-            "commit_sha": "${GITEA_SHA}",
-            "branch": "${GITEA_REF_NAME}",
+            "run_id": "${{ github.run_id }}",
+            "commit_sha": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
             "ssdf_practices": ["PO.1.1", "PO.3.2", "PO.4.1", "PS.1.1", "PS.2.1"],
             "scans_performed": {
               "git_secrets": "${{ steps.git-secrets.outputs.secrets_found }}",
@@ -168,8 +168,8 @@ jobs:
           EOF
 
           # Create evidence package
-          tar czf evidence-pre-commit-${GITEA_RUN_ID}.tar.gz evidence/
-          sha256sum evidence-pre-commit-${GITEA_RUN_ID}.tar.gz > evidence-pre-commit-${GITEA_RUN_ID}.sha256
+          tar czf evidence-pre-commit-${{ github.run_id }}.tar.gz evidence/
+          sha256sum evidence-pre-commit-${{ github.run_id }}.tar.gz > evidence-pre-commit-${{ github.run_id }}.sha256
 
           echo "✅ Evidence package created"
           echo "::endgroup::"

@@ -19,7 +19,7 @@ on:
     - cron: '0 2 * * *'  # Daily at 2 AM UTC
 
 env:
-  EVIDENCE_BUCKET: gs://ssdf-evidence-${GITEA_REPO_NAME}
+  EVIDENCE_BUCKET: gs://ssdf-evidence-${{ github.repository }}
   ZAP_VERSION: 2.14.0
   NUCLEI_VERSION: 3.1.0
 
@@ -298,11 +298,11 @@ jobs:
           cp -r dast-artifacts/* evidence/dast/ 2>/dev/null || true
 
           # Create evidence package
-          tar czf evidence-dast-${GITEA_RUN_ID}.tar.gz evidence/
-          sha256sum evidence-dast-${GITEA_RUN_ID}.tar.gz > evidence-dast-${GITEA_RUN_ID}.sha256
+          tar czf evidence-dast-${{ github.run_id }}.tar.gz evidence/
+          sha256sum evidence-dast-${{ github.run_id }}.tar.gz > evidence-dast-${{ github.run_id }}.sha256
 
           echo "✅ DAST evidence package created"
-          echo "SHA-256: $(cat evidence-dast-${GITEA_RUN_ID}.sha256 | cut -d' ' -f1)"
+          echo "SHA-256: $(cat evidence-dast-${{ github.run_id }}.sha256 | cut -d' ' -f1)"
           echo "::endgroup::"
 
       - name: Upload Evidence to GCS
@@ -310,8 +310,8 @@ jobs:
         run: |
           echo "::group::Uploading DAST Evidence"
           # Upload to GCS evidence bucket
-          gsutil cp evidence-dast-${GITEA_RUN_ID}.tar.gz ${EVIDENCE_BUCKET}/dast/
-          gsutil cp evidence-dast-${GITEA_RUN_ID}.sha256 ${EVIDENCE_BUCKET}/dast/
+          gsutil cp evidence-dast-${{ github.run_id }}.tar.gz ${EVIDENCE_BUCKET}/dast/
+          gsutil cp evidence-dast-${{ github.run_id }}.sha256 ${EVIDENCE_BUCKET}/dast/
 
           echo "✅ Evidence uploaded to ${EVIDENCE_BUCKET}/dast/"
           echo "::endgroup::"

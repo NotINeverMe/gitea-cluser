@@ -6,7 +6,7 @@ on:
 env:
   COVERAGE_THRESHOLD: 80
   SONAR_HOST_URL: http://sonarqube:9000
-  EVIDENCE_BUCKET: gs://ssdf-evidence-${GITEA_REPO_NAME}
+  EVIDENCE_BUCKET: gs://ssdf-evidence-${{ github.repository }}
 
 jobs:
   sast-scan:
@@ -46,18 +46,18 @@ jobs:
 
           # Run analysis
           sonar-scanner \
-            -Dsonar.projectKey=${GITEA_REPO_NAME} \
+            -Dsonar.projectKey=${{ github.repository }} \
             -Dsonar.sources=. \
             -Dsonar.host.url=${SONAR_HOST_URL} \
             -Dsonar.login=${SONAR_TOKEN} \
-            -Dsonar.pullrequest.key=${GITEA_PULL_REQUEST} \
-            -Dsonar.pullrequest.branch=${GITEA_HEAD_REF} \
-            -Dsonar.pullrequest.base=${GITEA_BASE_REF} || true
+            -Dsonar.pullrequest.key=${{ github.event.pull_request.number }} \
+            -Dsonar.pullrequest.branch=${{ github.head_ref }} \
+            -Dsonar.pullrequest.base=${{ github.base_ref }} || true
 
           # Check quality gate status
           sleep 10
           quality_gate=$(curl -s -u ${SONAR_TOKEN}: \
-            "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${GITEA_REPO_NAME}" \
+            "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${{ github.repository }}" \
             | jq -r '.projectStatus.status')
 
           echo "sonar_status=${quality_gate}" >> $GITHUB_OUTPUT
@@ -299,10 +299,10 @@ jobs:
           cat > evidence/pr-gate/manifest.json <<EOF
           {
             "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "pr_number": "${GITEA_PULL_REQUEST}",
-            "head_sha": "${GITEA_SHA}",
-            "base_branch": "${GITEA_BASE_REF}",
-            "head_branch": "${GITEA_HEAD_REF}",
+            "pr_number": "${{ github.event.pull_request.number }}",
+            "head_sha": "${{ github.sha }}",
+            "base_branch": "${{ github.base_ref }}",
+            "head_branch": "${{ github.head_ref }}",
             "gate_decision": "${block_merge}",
             "ssdf_practices": ["PW.2.1", "PW.3.1", "PW.4.1", "PW.4.2", "PW.6.1", "PW.6.2", "PW.9.1"],
             "scan_results": {
@@ -322,8 +322,8 @@ jobs:
           EOF
 
           # Create evidence package
-          tar czf evidence-pr-${GITEA_PULL_REQUEST}-${GITEA_RUN_ID}.tar.gz evidence/
-          sha256sum evidence-pr-${GITEA_PULL_REQUEST}-${GITEA_RUN_ID}.tar.gz > evidence-pr-${GITEA_PULL_REQUEST}-${GITEA_RUN_ID}.sha256
+          tar czf evidence-pr-${{ github.event.pull_request.number }}-${{ github.run_id }}.tar.gz evidence/
+          sha256sum evidence-pr-${{ github.event.pull_request.number }}-${{ github.run_id }}.tar.gz > evidence-pr-${{ github.event.pull_request.number }}-${{ github.run_id }}.sha256
           echo "::endgroup::"
 
       - name: Upload Evidence

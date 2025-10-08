@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 env:
-  EVIDENCE_BUCKET: gs://ssdf-evidence-${GITEA_REPO_NAME}
+  EVIDENCE_BUCKET: gs://ssdf-evidence-${{ github.repository }}
   SECURITY_REPORT_PATH: security-reports
 
 jobs:
@@ -454,14 +454,14 @@ jobs:
         run: |
           echo "::group::Evidence Collection and Upload"
           # Create evidence package
-          tar czf evidence-security-scan-${GITEA_RUN_ID}.tar.gz ${SECURITY_REPORT_PATH}/
-          sha256sum evidence-security-scan-${GITEA_RUN_ID}.tar.gz > evidence-security-scan-${GITEA_RUN_ID}.sha256
+          tar czf evidence-security-scan-${{ github.run_id }}.tar.gz ${SECURITY_REPORT_PATH}/
+          sha256sum evidence-security-scan-${{ github.run_id }}.tar.gz > evidence-security-scan-${{ github.run_id }}.sha256
 
           # Upload to GCS
-          gsutil cp evidence-security-scan-${GITEA_RUN_ID}.tar.gz ${EVIDENCE_BUCKET}/security-scans/
-          gsutil cp evidence-security-scan-${GITEA_RUN_ID}.sha256 ${EVIDENCE_BUCKET}/security-scans/
+          gsutil cp evidence-security-scan-${{ github.run_id }}.tar.gz ${EVIDENCE_BUCKET}/security-scans/
+          gsutil cp evidence-security-scan-${{ github.run_id }}.sha256 ${EVIDENCE_BUCKET}/security-scans/
 
-          echo "✅ Evidence uploaded with SHA-256: $(cat evidence-security-scan-${GITEA_RUN_ID}.sha256 | cut -d' ' -f1)"
+          echo "✅ Evidence uploaded with SHA-256: $(cat evidence-security-scan-${{ github.run_id }}.sha256 | cut -d' ' -f1)"
           echo "::endgroup::"
 
       - name: Upload Artifacts

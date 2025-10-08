@@ -7,7 +7,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  EVIDENCE_BUCKET: gs://ssdf-evidence-${GITEA_REPO_NAME}
+  EVIDENCE_BUCKET: gs://ssdf-evidence-${{ github.repository }}
   COSIGN_EXPERIMENTAL: 1
 
 jobs:
@@ -337,10 +337,10 @@ jobs:
           EOF
 
           # Create evidence package
-          tar czf evidence-build-${GITEA_RUN_ID}.tar.gz evidence/
-          sha256sum evidence-build-${GITEA_RUN_ID}.tar.gz > evidence-build-${GITEA_RUN_ID}.sha256
+          tar czf evidence-build-${{ github.run_id }}.tar.gz evidence/
+          sha256sum evidence-build-${{ github.run_id }}.tar.gz > evidence-build-${{ github.run_id }}.sha256
 
-          echo "✅ Evidence package created with SHA-256: $(cat evidence-build-${GITEA_RUN_ID}.sha256 | cut -d' ' -f1)"
+          echo "✅ Evidence package created with SHA-256: $(cat evidence-build-${{ github.run_id }}.sha256 | cut -d' ' -f1)"
           echo "::endgroup::"
 
       - name: Upload to GCS Evidence Bucket
@@ -354,8 +354,8 @@ jobs:
           fi
 
           # Upload evidence
-          gsutil cp evidence-build-${GITEA_RUN_ID}.tar.gz ${EVIDENCE_BUCKET}/build/
-          gsutil cp evidence-build-${GITEA_RUN_ID}.sha256 ${EVIDENCE_BUCKET}/build/
+          gsutil cp evidence-build-${{ github.run_id }}.tar.gz ${EVIDENCE_BUCKET}/build/
+          gsutil cp evidence-build-${{ github.run_id }}.sha256 ${EVIDENCE_BUCKET}/build/
 
           echo "✅ Evidence uploaded to ${EVIDENCE_BUCKET}/build/"
           echo "::endgroup::"

@@ -25,7 +25,7 @@ on:
 env:
   ATLANTIS_URL: http://atlantis:4141
   FALCO_RULES_PATH: /etc/falco/rules.d
-  EVIDENCE_BUCKET: gs://ssdf-evidence-${GITEA_REPO_NAME}
+  EVIDENCE_BUCKET: gs://ssdf-evidence-${{ github.repository }}
   TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
   TF_VAR_region: us-central1
 
@@ -474,11 +474,11 @@ jobs:
           EOF
 
           # Create evidence package
-          tar czf evidence-deployment-${GITEA_RUN_ID}.tar.gz evidence/
-          sha256sum evidence-deployment-${GITEA_RUN_ID}.tar.gz > evidence-deployment-${GITEA_RUN_ID}.sha256
+          tar czf evidence-deployment-${{ github.run_id }}.tar.gz evidence/
+          sha256sum evidence-deployment-${{ github.run_id }}.tar.gz > evidence-deployment-${{ github.run_id }}.sha256
 
           echo "✅ Deployment evidence collected"
-          echo "SHA-256: $(cat evidence-deployment-${GITEA_RUN_ID}.sha256 | cut -d' ' -f1)"
+          echo "SHA-256: $(cat evidence-deployment-${{ github.run_id }}.sha256 | cut -d' ' -f1)"
           echo "::endgroup::"
 
       - name: Upload Evidence to GCS
@@ -486,8 +486,8 @@ jobs:
         run: |
           echo "::group::Uploading Evidence"
           # Upload to GCS
-          gsutil cp evidence-deployment-${GITEA_RUN_ID}.tar.gz ${EVIDENCE_BUCKET}/deployments/
-          gsutil cp evidence-deployment-${GITEA_RUN_ID}.sha256 ${EVIDENCE_BUCKET}/deployments/
+          gsutil cp evidence-deployment-${{ github.run_id }}.tar.gz ${EVIDENCE_BUCKET}/deployments/
+          gsutil cp evidence-deployment-${{ github.run_id }}.sha256 ${EVIDENCE_BUCKET}/deployments/
 
           echo "✅ Evidence uploaded to ${EVIDENCE_BUCKET}/deployments/"
           echo "::endgroup::"

@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 env:
-  EVIDENCE_BUCKET: gs://ssdf-evidence-${GITEA_REPO_NAME}
+  EVIDENCE_BUCKET: gs://ssdf-evidence-${{ github.repository }}
   CMMC_CONTROLS_PATH: /home/notme/Desktop/gitea/CONTROL_MAPPING_MATRIX.md
   DASHBOARD_URL: http://localhost:8050
 
@@ -475,11 +475,11 @@ jobs:
           EOF
 
           # Create tarball with all evidence
-          tar czf evidence-compliance-${GITEA_RUN_ID}.tar.gz evidence/
-          sha256sum evidence-compliance-${GITEA_RUN_ID}.tar.gz > evidence-compliance-${GITEA_RUN_ID}.sha256
+          tar czf evidence-compliance-${{ github.run_id }}.tar.gz evidence/
+          sha256sum evidence-compliance-${{ github.run_id }}.tar.gz > evidence-compliance-${{ github.run_id }}.sha256
 
           echo "✅ Evidence package created"
-          echo "SHA-256: $(cat evidence-compliance-${GITEA_RUN_ID}.sha256 | cut -d' ' -f1)"
+          echo "SHA-256: $(cat evidence-compliance-${{ github.run_id }}.sha256 | cut -d' ' -f1)"
           echo "::endgroup::"
 
       - name: Upload to GCS Evidence Bucket
@@ -495,9 +495,9 @@ jobs:
           gsutil -h "x-goog-meta-ssdf-score:${{ steps.assessment.outputs.compliance_score }}" \
             -h "x-goog-meta-commit:${{ github.sha }}" \
             -h "x-goog-meta-timestamp:$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            cp evidence-compliance-${GITEA_RUN_ID}.tar.gz ${EVIDENCE_BUCKET}/compliance/
+            cp evidence-compliance-${{ github.run_id }}.tar.gz ${EVIDENCE_BUCKET}/compliance/
 
-          gsutil cp evidence-compliance-${GITEA_RUN_ID}.sha256 ${EVIDENCE_BUCKET}/compliance/
+          gsutil cp evidence-compliance-${{ github.run_id }}.sha256 ${EVIDENCE_BUCKET}/compliance/
 
           echo "✅ Evidence uploaded to ${EVIDENCE_BUCKET}/compliance/"
           echo "::endgroup::"
@@ -553,8 +553,8 @@ jobs:
 
           All evidence has been collected and stored in:
           - **GCS Bucket**: ${EVIDENCE_BUCKET}
-          - **Evidence Package**: evidence-compliance-${GITEA_RUN_ID}.tar.gz
-          - **SHA-256 Hash**: $(cat evidence-compliance-${GITEA_RUN_ID}.sha256 | cut -d' ' -f1)
+          - **Evidence Package**: evidence-compliance-${{ github.run_id }}.tar.gz
+          - **SHA-256 Hash**: $(cat evidence-compliance-${{ github.run_id }}.sha256 | cut -d' ' -f1)
 
           ## Recommendations
 
