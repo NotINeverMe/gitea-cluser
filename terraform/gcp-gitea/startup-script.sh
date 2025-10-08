@@ -849,7 +849,7 @@ sleep 30
 
 # Check if Gitea is running
 for i in {1..60}; do
-    if docker exec gitea curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/v1/version | grep -q "200"; then
+    if docker exec gitea curl -s -o /dev/null -w "%%{http_code}" http://localhost:3000/api/v1/version | grep -q "200"; then
         log "Gitea is ready"
         break
     fi

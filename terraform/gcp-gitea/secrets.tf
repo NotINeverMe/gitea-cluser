@@ -47,18 +47,21 @@ data "google_secret_manager_secret_version" "gitea_runner_token" {
   project = var.project_id
 }
 
-# Namecheap API credentials for DNS updates
+# Namecheap API credentials for DNS updates (optional - for DNS automation)
 data "google_secret_manager_secret_version" "namecheap_api_key" {
+  count = 0  # Disabled - Namecheap secrets not required for core Gitea functionality
   secret  = "namecheap-api-key"
   project = var.project_id
 }
 
 data "google_secret_manager_secret_version" "namecheap_api_user" {
+  count = 0  # Disabled - Namecheap secrets not required for core Gitea functionality
   secret  = "namecheap-api-user"
   project = var.project_id
 }
 
 data "google_secret_manager_secret_version" "namecheap_api_ip" {
+  count = 0  # Disabled - Namecheap secrets not required for core Gitea functionality
   secret  = "namecheap-api-ip"
   project = var.project_id
 }
@@ -78,10 +81,10 @@ locals {
   gitea_metrics_token    = data.google_secret_manager_secret_version.gitea_metrics_token.secret_data
   gitea_runner_token     = data.google_secret_manager_secret_version.gitea_runner_token.secret_data
 
-  # DNS automation credentials
-  namecheap_api_key  = data.google_secret_manager_secret_version.namecheap_api_key.secret_data
-  namecheap_api_user = data.google_secret_manager_secret_version.namecheap_api_user.secret_data
-  namecheap_api_ip   = data.google_secret_manager_secret_version.namecheap_api_ip.secret_data
+  # DNS automation credentials (optional - disabled by default)
+  namecheap_api_key  = length(data.google_secret_manager_secret_version.namecheap_api_key) > 0 ? data.google_secret_manager_secret_version.namecheap_api_key[0].secret_data : ""
+  namecheap_api_user = length(data.google_secret_manager_secret_version.namecheap_api_user) > 0 ? data.google_secret_manager_secret_version.namecheap_api_user[0].secret_data : ""
+  namecheap_api_ip   = length(data.google_secret_manager_secret_version.namecheap_api_ip) > 0 ? data.google_secret_manager_secret_version.namecheap_api_ip[0].secret_data : ""
 }
 
 # ============================================================================
@@ -91,10 +94,10 @@ locals {
 # This script writes secrets to /run/secrets/ for Docker to consume
 # Secrets are written at instance startup, never stored in Terraform state
 resource "null_resource" "write_secrets_to_vm" {
-  depends_on = [google_compute_instance.gitea]
+  depends_on = [google_compute_instance.gitea_server]
 
   triggers = {
-    instance_id = google_compute_instance.gitea.instance_id
+    instance_id = google_compute_instance.gitea_server.instance_id
   }
 
   provisioner "remote-exec" {
@@ -123,9 +126,9 @@ resource "null_resource" "write_secrets_to_vm" {
     connection {
       type         = "ssh"
       user         = "gitea"
-      host         = google_compute_instance.gitea.network_interface[0].access_config[0].nat_ip
+      host         = google_compute_instance.gitea_server.network_interface[0].access_config[0].nat_ip
       private_key  = file("~/.ssh/id_rsa")
-      bastion_host = var.enable_iap ? null : google_compute_instance.gitea.network_interface[0].access_config[0].nat_ip
+      bastion_host = var.enable_iap ? null : google_compute_instance.gitea_server.network_interface[0].access_config[0].nat_ip
     }
   }
 }

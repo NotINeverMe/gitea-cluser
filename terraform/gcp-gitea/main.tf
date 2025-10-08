@@ -18,9 +18,9 @@ locals {
   backup_bucket   = "${local.name_prefix}-backups"
   logs_bucket     = "${local.name_prefix}-logs"
 
-  # Service account configuration
-  gitea_sa        = "${local.name_prefix}-gitea-sa"
-  evidence_sa     = "${local.name_prefix}-evidence-sa"
+  # Service account configuration (short names to meet 30-char limit)
+  gitea_sa        = "gitea-sa"
+  evidence_sa     = "gitea-evidence"
 
   # Secret names
   admin_password_secret  = "${local.name_prefix}-gitea-admin-password"
@@ -42,13 +42,13 @@ locals {
   # CMMC asset category labels
   cmmc_labels = {
     gitea_vm = merge(local.common_labels, {
-      "cmmc-asset-category" = "CUI"
-      "cmmc-controls" = "AC.L2-3.1.1,AU.L2-3.3.1,IA.L2-3.5.1,SC.L2-3.13.8"
+      "cmmc-asset-category" = "cui"
+      "cmmc-controls" = "ac-l2-3-1-1,au-l2-3-3-1,ia-l2-3-5-1,sc-l2-3-13-8"
     })
 
     evidence_bucket = merge(local.common_labels, {
-      "cmmc-asset-category" = "CUI"
-      "cmmc-controls" = "AU.L2-3.3.1,SC.L2-3.13.11"
+      "cmmc-asset-category" = "cui"
+      "cmmc-controls" = "au-l2-3-3-1,sc-l2-3-13-11"
     })
   }
 }
@@ -94,7 +94,6 @@ resource "local_file" "deployment_evidence" {
 
   content = jsonencode({
     deployment_timestamp = timestamp()
-    terraform_version    = terraform.version
     workspace           = terraform.workspace
     project_id          = var.project_id
     region              = var.region

@@ -346,3 +346,9 @@ variable "metadata" {
   type        = map(string)
   default     = {}
 }
+
+variable "enable_iam_conditions" {
+  description = "Enable IAM conditions for enhanced security"
+  type        = bool
+  default     = false
+}

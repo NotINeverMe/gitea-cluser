@@ -98,10 +98,11 @@ create_secret() {
             --project="${PROJECT_ID}" \
             --data-file=-
 
-        # Set description
+        # Set description (convert to lowercase, replace spaces with hyphens, remove parentheses for label)
+        local label_desc=$(echo "${description}" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -d '()')
         gcloud secrets update "${secret_name}" \
             --project="${PROJECT_ID}" \
-            --update-labels="description=${description// /_}"
+            --update-labels="description=${label_desc}"
     fi
 
     log SUCCESS "Secret ${secret_name} configured"

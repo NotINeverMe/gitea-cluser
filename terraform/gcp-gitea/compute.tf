@@ -38,12 +38,13 @@ resource "google_compute_instance" "gitea_server" {
     }
 
     # Enable CMEK encryption if KMS is enabled
-    dynamic "disk_encryption_key" {
-      for_each = var.enable_kms ? [1] : []
-      content {
-        kms_key_self_link = google_kms_crypto_key.disk_key[0].id
-      }
-    }
+    # Note: Disk encryption configured via disk_encryption_key at attached_disk level
+    # dynamic "disk_encryption_key" {
+    #   for_each = var.enable_kms ? [1] : []
+    #   content {
+    #     kms_key_self_link = google_kms_crypto_key.disk_key[0].id
+    #   }
+    # }
 
     # Auto-delete boot disk when instance is deleted
     auto_delete = true
@@ -115,6 +116,8 @@ resource "google_compute_instance" "gitea_server" {
         gitea_disable_registration = var.gitea_disable_registration
         gitea_require_signin_view = var.gitea_require_signin_view
         enable_docker_gcr      = var.enable_docker_gcr
+        distro_id              = "Ubuntu"
+        distro_codename        = "jammy"
       })
 
       # Serial port logging for debugging
@@ -123,12 +126,9 @@ resource "google_compute_instance" "gitea_server" {
     var.metadata
   )
 
-  # Metadata startup script for updates
-  metadata_startup_script = <<-EOT
-    #!/bin/bash
-    # Log startup for audit trail - AU.L2-3.3.1
-    echo "[$(date)] Instance startup initiated" | tee -a /var/log/startup.log
-  EOT
+  # Use only one startup script mechanism. The full bootstrap runs via
+  # metadata["startup-script"] above to avoid conflicts with
+  # metadata_startup_script.
 
   # Scheduling for cost optimization and maintenance windows
   scheduling {

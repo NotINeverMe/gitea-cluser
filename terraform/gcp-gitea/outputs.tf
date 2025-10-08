@@ -321,9 +321,9 @@ output "deployment_timestamp" {
   value       = timestamp()
 }
 
-output "terraform_version" {
-  description = "Version of Terraform used for deployment"
-  value       = terraform.version
+output "terraform_workspace" {
+  description = "Terraform workspace used for deployment"
+  value       = terraform.workspace
 }
 
 output "environment" {

@@ -11,7 +11,7 @@ resource "google_kms_key_ring" "gitea_keyring" {
   count = var.enable_kms ? 1 : 0
 
   name     = "${local.name_prefix}-keyring"
-  location = var.region
+  location = var.region  # Use regional to match GCS bucket location
 }
 
 # Crypto key for disk encryption - SC.L2-3.13.16: Information at Rest
@@ -34,8 +34,8 @@ resource "google_kms_crypto_key" "disk_key" {
   # Labels for compliance tracking
   labels = merge(local.common_labels, {
     "purpose"      = "disk-encryption"
-    "cmmc-control" = "SC.L2-3.13.11"
-    "nist-control" = "SC.L2-3.13.16"
+    "cmmc-control" = "sc-l2-3-13-11"
+    "nist-control" = "sc-l2-3-13-16"
   })
 
   lifecycle {
@@ -60,7 +60,7 @@ resource "google_kms_crypto_key" "storage_key" {
 
   labels = merge(local.common_labels, {
     "purpose"      = "storage-encryption"
-    "cmmc-control" = "SC.L2-3.13.11"
+    "cmmc-control" = "sc-l2-3-13-11"
   })
 
   lifecycle {
@@ -85,7 +85,7 @@ resource "google_kms_crypto_key" "secrets_key" {
 
   labels = merge(local.common_labels, {
     "purpose"      = "secrets-encryption"
-    "cmmc-control" = "SC.L2-3.13.11"
+    "cmmc-control" = "sc-l2-3-13-11"
   })
 
   lifecycle {
@@ -113,7 +113,7 @@ resource "google_service_account" "evidence_sa" {
 
 # Service account for backup operations
 resource "google_service_account" "backup_sa" {
-  account_id   = "${local.name_prefix}-backup-sa"
+  account_id   = "gitea-backup-sa"
   display_name = "Backup Service Account"
   description  = "Service account for automated backup operations"
 }
@@ -130,7 +130,7 @@ resource "google_secret_manager_secret" "admin_password" {
 
   labels = merge(local.common_labels, {
     "purpose"      = "gitea-admin"
-    "cmmc-control" = "IA.L2-3.5.7"
+    "cmmc-control" = "ia-l2-3-5-7"
   })
 
   replication {
@@ -138,12 +138,13 @@ resource "google_secret_manager_secret" "admin_password" {
       replicas {
         location = var.region
 
-        dynamic "customer_managed_encryption" {
-          for_each = var.enable_kms ? [1] : []
-          content {
-            kms_key_name = google_kms_crypto_key.secrets_key[0].id
-          }
-        }
+        # CMEK encryption disabled - requires service identity setup
+        # dynamic "customer_managed_encryption" {
+        #   for_each = var.enable_kms ? [1] : []
+        #   content {
+        #     kms_key_name = google_kms_crypto_key.secrets_key[0].id
+        #   }
+        # }
       }
     }
   }
@@ -173,7 +174,7 @@ resource "google_secret_manager_secret" "db_password" {
 
   labels = merge(local.common_labels, {
     "purpose"      = "postgres-db"
-    "cmmc-control" = "IA.L2-3.5.7"
+    "cmmc-control" = "ia-l2-3-5-7"
   })
 
   replication {
@@ -181,12 +182,13 @@ resource "google_secret_manager_secret" "db_password" {
       replicas {
         location = var.region
 
-        dynamic "customer_managed_encryption" {
-          for_each = var.enable_kms ? [1] : []
-          content {
-            kms_key_name = google_kms_crypto_key.secrets_key[0].id
-          }
-        }
+        # CMEK encryption disabled - requires service identity setup
+        # dynamic "customer_managed_encryption" {
+        #   for_each = var.enable_kms ? [1] : []
+        #   content {
+        #     kms_key_name = google_kms_crypto_key.secrets_key[0].id
+        #   }
+        # }
       }
     }
   }
@@ -212,7 +214,7 @@ resource "google_secret_manager_secret" "runner_token" {
 
   labels = merge(local.common_labels, {
     "purpose"      = "gitea-runner"
-    "cmmc-control" = "IA.L2-3.5.1"
+    "cmmc-control" = "ia-l2-3-5-1"
   })
 
   replication {
@@ -220,12 +222,13 @@ resource "google_secret_manager_secret" "runner_token" {
       replicas {
         location = var.region
 
-        dynamic "customer_managed_encryption" {
-          for_each = var.enable_kms ? [1] : []
-          content {
-            kms_key_name = google_kms_crypto_key.secrets_key[0].id
-          }
-        }
+        # CMEK encryption disabled - requires service identity setup
+        # dynamic "customer_managed_encryption" {
+        #   for_each = var.enable_kms ? [1] : []
+        #   content {
+        #     kms_key_name = google_kms_crypto_key.secrets_key[0].id
+        #   }
+        # }
       }
     }
   }
@@ -296,10 +299,10 @@ resource "google_project_iam_member" "backup_sa_roles" {
 
 # KMS key IAM bindings
 resource "google_kms_crypto_key_iam_member" "disk_key_users" {
-  for_each = var.enable_kms ? toset([
-    google_service_account.gitea_sa.email,
-    "serviceAccount:service-${data.google_project.current.number}@compute-system.iam.gserviceaccount.com",
-  ]) : toset([])
+  for_each = var.enable_kms ? tomap({
+    "gitea-sa"        = google_service_account.gitea_sa.email,
+    "compute-service" = "service-${data.google_project.current.number}@compute-system.iam.gserviceaccount.com",
+  }) : tomap({})
 
   crypto_key_id = google_kms_crypto_key.disk_key[0].id
   role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
@@ -307,12 +310,12 @@ resource "google_kms_crypto_key_iam_member" "disk_key_users" {
 }
 
 resource "google_kms_crypto_key_iam_member" "storage_key_users" {
-  for_each = var.enable_kms ? toset([
-    google_service_account.gitea_sa.email,
-    google_service_account.evidence_sa.email,
-    google_service_account.backup_sa.email,
-    "serviceAccount:service-${data.google_project.current.number}@gs-project-accounts.iam.gserviceaccount.com",
-  ]) : toset([])
+  for_each = var.enable_kms ? tomap({
+    "gitea-sa"        = google_service_account.gitea_sa.email,
+    "evidence-sa"     = google_service_account.evidence_sa.email,
+    "backup-sa"       = google_service_account.backup_sa.email,
+    "storage-service" = "service-${data.google_project.current.number}@gs-project-accounts.iam.gserviceaccount.com",
+  }) : tomap({})
 
   crypto_key_id = google_kms_crypto_key.storage_key[0].id
   role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
