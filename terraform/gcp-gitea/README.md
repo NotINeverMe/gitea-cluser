@@ -131,6 +131,22 @@ This Terraform module deploys a production-ready, security-hardened Gitea instan
    terraform apply
    ```
 
+### If You See KMS/CMEK or Metadata Conflicts
+
+- Error: Cannot provide both `metadata_startup_script` and `metadata.startup-script`
+  - The module uses only `metadata["startup-script"]`. Ensure no `metadata_startup_script` blocks are present in your overrides. Current module code has removed it (compute.tf: metadata template only).
+
+- Error: `cloudkms.cryptoKeyVersions.useToEncrypt` denied
+  - This typically occurs when keys pre-exist or IAM bindings are not yet applied. Import existing keys, then re-apply:
+  ```bash
+  # From terraform/gcp-gitea directory
+  PROJECT_ID=your-proj REGION=us-central1 ENV=prod ./scripts/kms-import.sh
+  terraform plan -out=tfplan
+  terraform apply -auto-approve tfplan
+  ```
+  - Ensure the Compute Engine Service Agent and service accounts have `roles/cloudkms.cryptoKeyEncrypterDecrypter` (module config handles this in security.tf).
+
+
 6. **Access Gitea**:
    - Get the external IP: `terraform output instance_external_ip`
    - Configure DNS to point your domain to this IP

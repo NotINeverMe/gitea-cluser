@@ -14,8 +14,8 @@ resource "google_compute_instance" "gitea_server" {
   # Enable deletion protection for production
   deletion_protection = var.environment == "prod" ? true : false
 
-  # Minimum CPU platform for better performance
-  min_cpu_platform = var.cpu_platform
+  # Minimum CPU platform not supported for e2-standard-8
+  # min_cpu_platform = var.cpu_platform
 
   # Tags for firewall rules and identification
   tags = ["gitea-server", "https-server", "ssh-server"]
@@ -136,12 +136,12 @@ resource "google_compute_instance" "gitea_server" {
     automatic_restart = true
     on_host_maintenance = "MIGRATE"
 
-    # Node affinity for consistent performance
-    node_affinities {
-      key      = "node-group"
-      operator = "IN"
-      values   = ["gitea-nodes"]
-    }
+    # Node affinity commented out - cannot specify both cpu_platform and node_affinities
+    # node_affinities {
+    #   key      = "node-group"
+    #   operator = "IN"
+    #   values   = ["gitea-nodes"]
+    # }
   }
 
   # Guest accelerators (if needed for ML workloads)

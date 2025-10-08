@@ -43,12 +43,14 @@ locals {
   cmmc_labels = {
     gitea_vm = merge(local.common_labels, {
       "cmmc-asset-category" = "cui"
-      "cmmc-controls" = "ac-l2-3-1-1,au-l2-3-3-1,ia-l2-3-5-1,sc-l2-3-13-8"
+      "cmmc-controls" = "ac-au-ia-sc"
+      "cmmc-level" = "level-2"
     })
 
     evidence_bucket = merge(local.common_labels, {
       "cmmc-asset-category" = "cui"
-      "cmmc-controls" = "au-l2-3-3-1,sc-l2-3-13-11"
+      "cmmc-controls" = "au-sc"
+      "cmmc-level" = "level-2"
     })
   }
 }
