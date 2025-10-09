@@ -206,6 +206,130 @@ resource "google_secret_manager_secret_version" "db_password_version" {
   }
 }
 
+# Secret for Gitea application secret key
+resource "google_secret_manager_secret" "gitea_secret_key" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = local.gitea_secret_key_secret
+
+  labels = merge(local.common_labels, {
+    "purpose"      = "gitea-secret-key"
+    "cmmc-control" = "ia-l2-3-5-1"
+  })
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+}
+
+resource "google_secret_manager_secret_version" "gitea_secret_key_version" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret      = google_secret_manager_secret.gitea_secret_key[0].id
+  secret_data = random_password.gitea_secret_key.result
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
+# Secret for Gitea internal token
+resource "google_secret_manager_secret" "gitea_internal_token" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = local.gitea_internal_token_secret
+
+  labels = merge(local.common_labels, {
+    "purpose"      = "gitea-internal-token"
+    "cmmc-control" = "ia-l2-3-5-1"
+  })
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+}
+
+resource "google_secret_manager_secret_version" "gitea_internal_token_version" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret      = google_secret_manager_secret.gitea_internal_token[0].id
+  secret_data = random_password.gitea_internal_token.result
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
+# Secret for Gitea OAuth2 JWT secret
+resource "google_secret_manager_secret" "gitea_oauth2_jwt_secret" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = local.gitea_oauth2_jwt_secret
+
+  labels = merge(local.common_labels, {
+    "purpose"      = "gitea-oauth2-jwt"
+    "cmmc-control" = "ia-l2-3-5-1"
+  })
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+}
+
+resource "google_secret_manager_secret_version" "gitea_oauth2_jwt_secret_version" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret      = google_secret_manager_secret.gitea_oauth2_jwt_secret[0].id
+  secret_data = random_password.gitea_oauth2_jwt_secret.result
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
+# Secret for Gitea metrics token
+resource "google_secret_manager_secret" "gitea_metrics_token" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = local.gitea_metrics_token_secret
+
+  labels = merge(local.common_labels, {
+    "purpose"      = "gitea-metrics-token"
+    "cmmc-control" = "ia-l2-3-5-1"
+  })
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+}
+
+resource "google_secret_manager_secret_version" "gitea_metrics_token_version" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret      = google_secret_manager_secret.gitea_metrics_token[0].id
+  secret_data = random_password.gitea_metrics_token.result
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
 # Secret for Gitea runner token
 resource "google_secret_manager_secret" "runner_token" {
   count = var.enable_secret_manager ? 1 : 0
@@ -235,6 +359,26 @@ resource "google_secret_manager_secret" "runner_token" {
 }
 
 # Generate random runner token
+resource "random_password" "gitea_secret_key" {
+  length  = 64
+  special = true
+}
+
+resource "random_password" "gitea_internal_token" {
+  length  = 64
+  special = false
+}
+
+resource "random_password" "gitea_oauth2_jwt_secret" {
+  length  = 64
+  special = false
+}
+
+resource "random_password" "gitea_metrics_token" {
+  length  = 48
+  special = false
+}
+
 resource "random_password" "runner_token" {
   length  = 40
   special = false  # Alphanumeric only for runner token
@@ -343,6 +487,38 @@ resource "google_secret_manager_secret_iam_member" "runner_token_access" {
   count = var.enable_secret_manager ? 1 : 0
 
   secret_id = google_secret_manager_secret.runner_token[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.gitea_sa.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "gitea_secret_key_access" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = google_secret_manager_secret.gitea_secret_key[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.gitea_sa.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "gitea_internal_token_access" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = google_secret_manager_secret.gitea_internal_token[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.gitea_sa.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "gitea_oauth2_jwt_secret_access" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = google_secret_manager_secret.gitea_oauth2_jwt_secret[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.gitea_sa.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "gitea_metrics_token_access" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = google_secret_manager_secret.gitea_metrics_token[0].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.gitea_sa.email}"
 }

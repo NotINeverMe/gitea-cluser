@@ -23,6 +23,10 @@ EVIDENCE_BUCKET="${evidence_bucket}"
 BACKUP_BUCKET="${backup_bucket}"
 LOGS_BUCKET="${logs_bucket}"
 ENABLE_SECRET_MANAGER="${enable_secret_manager}"
+GITEA_SECRET_KEY_SECRET="${gitea_secret_key_secret}"
+GITEA_INTERNAL_TOKEN_SECRET="${gitea_internal_token_secret}"
+GITEA_OAUTH2_JWT_SECRET="${gitea_oauth2_jwt_secret}"
+GITEA_METRICS_TOKEN_SECRET="${gitea_metrics_token_secret}"
 GITEA_DISABLE_REGISTRATION="${gitea_disable_registration}"
 GITEA_REQUIRE_SIGNIN_VIEW="${gitea_require_signin_view}"
 ENABLE_DOCKER_GCR="${enable_docker_gcr}"
@@ -31,6 +35,7 @@ ENABLE_DOCKER_GCR="${enable_docker_gcr}"
 LOG_FILE="/var/log/startup-script.log"
 EVIDENCE_DIR="/var/log/evidence"
 AUDIT_LOG="/var/log/audit/audit.log"
+SECRETS_DIR="/mnt/gitea-data/secrets"
 
 # ============================================================================
 # LOGGING FUNCTIONS
@@ -46,6 +51,30 @@ log_error() {
 
 log_security() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] SECURITY: $1" | tee -a "$LOG_FILE" "$EVIDENCE_DIR/security.log"
+}
+
+# Fetch secret helper (intentionally exits on missing secret when Secret Manager is enabled)
+fetch_secret_or_fail() {
+    local secret_name="$1"
+    local value
+
+    if ! value=$(gcloud secrets versions access latest --secret="$secret_name" --project="$PROJECT_ID" 2>/dev/null); then
+        log_error "Failed to retrieve secret '${secret_name}' from Secret Manager"
+        return 1
+    fi
+
+    printf "%s" "${value}"
+}
+
+write_secret_file() {
+    local name="$1"
+    local value="$2"
+    local path="${SECRETS_DIR}/${name}"
+
+    umask 077
+    printf "%s" "${value}" > "${path}"
+    chmod 600 "${path}"
+    chown root:root "${path}"
 }
 
 # ============================================================================
@@ -521,15 +550,54 @@ systemctl restart google-cloud-ops-agent
 if [[ "$ENABLE_SECRET_MANAGER" == "true" ]]; then
     log "Retrieving secrets from Secret Manager"
 
-    ADMIN_PASSWORD=$(gcloud secrets versions access latest --secret="$ADMIN_PASSWORD_SECRET" --project="$PROJECT_ID")
-    DB_PASSWORD=$(gcloud secrets versions access latest --secret="$DB_PASSWORD_SECRET" --project="$PROJECT_ID")
-    RUNNER_TOKEN=$(gcloud secrets versions access latest --secret="$RUNNER_TOKEN_SECRET" --project="$PROJECT_ID")
+    if ! ADMIN_PASSWORD=$(fetch_secret_or_fail "$ADMIN_PASSWORD_SECRET"); then
+        exit 1
+    fi
+
+    if ! DB_PASSWORD=$(fetch_secret_or_fail "$DB_PASSWORD_SECRET"); then
+        exit 1
+    fi
+
+    if ! RUNNER_TOKEN=$(fetch_secret_or_fail "$RUNNER_TOKEN_SECRET"); then
+        exit 1
+    fi
+
+    if ! GITEA_SECRET_KEY=$(fetch_secret_or_fail "$GITEA_SECRET_KEY_SECRET"); then
+        exit 1
+    fi
+
+    if ! GITEA_INTERNAL_TOKEN=$(fetch_secret_or_fail "$GITEA_INTERNAL_TOKEN_SECRET"); then
+        exit 1
+    fi
+
+    if ! GITEA_OAUTH2_JWT_SECRET=$(fetch_secret_or_fail "$GITEA_OAUTH2_JWT_SECRET"); then
+        exit 1
+    fi
+
+    if ! GITEA_METRICS_TOKEN=$(fetch_secret_or_fail "$GITEA_METRICS_TOKEN_SECRET"); then
+        exit 1
+    fi
 else
-    log "Using default passwords (not recommended for production)"
+    log "Secret Manager disabled; generating ephemeral credentials"
+
     ADMIN_PASSWORD="ChangeMe!123456"
     DB_PASSWORD="ChangeMe!123456"
-    RUNNER_TOKEN="ChangeMe!123456"
+    RUNNER_TOKEN=$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 40)
+    GITEA_SECRET_KEY=$(openssl rand -hex 32)
+    GITEA_INTERNAL_TOKEN=$(openssl rand -hex 32)
+    GITEA_OAUTH2_JWT_SECRET=$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 64)
+    GITEA_METRICS_TOKEN=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 48)
 fi
+
+# Prepare secret material for docker compose (mounted via docker secrets)
+mkdir -p "$SECRETS_DIR"
+chmod 700 "$SECRETS_DIR"
+
+write_secret_file "postgres_password" "$DB_PASSWORD"
+write_secret_file "gitea_secret_key" "$GITEA_SECRET_KEY"
+write_secret_file "gitea_internal_token" "$GITEA_INTERNAL_TOKEN"
+write_secret_file "gitea_oauth2_jwt_secret" "$GITEA_OAUTH2_JWT_SECRET"
+write_secret_file "gitea_metrics_token" "$GITEA_METRICS_TOKEN"
 
 # ============================================================================
 # CREATE DOCKER COMPOSE CONFIGURATION
@@ -554,13 +622,15 @@ services:
     restart: always
     environment:
       - POSTGRES_USER=gitea
-      - POSTGRES_PASSWORD=$DB_PASSWORD
       - POSTGRES_DB=gitea
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
     networks:
       gitea:
         ipv4_address: 172.20.0.2
     volumes:
       - /mnt/gitea-data/postgres:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gitea"]
       interval: 10s
@@ -597,8 +667,8 @@ services:
       - GITEA__service__DEFAULT_ALLOW_CREATE_ORGANIZATION=false
       - GITEA__service__DEFAULT_ENABLE_TIMETRACKING=true
       - GITEA__security__INSTALL_LOCK=true
-      - GITEA__security__SECRET_KEY=\$(openssl rand -hex 32)
-      - GITEA__security__INTERNAL_TOKEN=\$(openssl rand -hex 32)
+      - GITEA__security__SECRET_KEY_FILE=/run/secrets/gitea_secret_key
+      - GITEA__security__INTERNAL_TOKEN_FILE=/run/secrets/gitea_internal_token
       - GITEA__security__PASSWORD_COMPLEXITY=lower,upper,digit,spec
       - GITEA__security__MIN_PASSWORD_LENGTH=14
       - GITEA__security__PASSWORD_CHECK_PWN=true
@@ -612,7 +682,10 @@ services:
       - GITEA__ui__DEFAULT_THEME=arc-green
       - GITEA__webhook__ALLOWED_HOST_LIST=*
       - GITEA__metrics__ENABLED=true
+      - GITEA__metrics__TOKEN_FILE=/run/secrets/gitea_metrics_token
       - GITEA__actions__ENABLED=true
+      - GITEA__oauth__JWT_SECRET_FILE=/run/secrets/gitea_oauth2_jwt_secret
+      - GITEA__oauth2_client__JWT_SECRET_FILE=/run/secrets/gitea_oauth2_jwt_secret
     networks:
       gitea:
         ipv4_address: 172.20.0.3
@@ -626,6 +699,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    secrets:
+      - gitea_secret_key
+      - gitea_internal_token
+      - gitea_oauth2_jwt_secret
+      - gitea_metrics_token
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/version"]
       interval: 30s
@@ -681,6 +759,18 @@ services:
       options:
         max-size: "50m"
         max-file: "10"
+
+secrets:
+  postgres_password:
+    file: ${SECRETS_DIR}/postgres_password
+  gitea_secret_key:
+    file: ${SECRETS_DIR}/gitea_secret_key
+  gitea_internal_token:
+    file: ${SECRETS_DIR}/gitea_internal_token
+  gitea_oauth2_jwt_secret:
+    file: ${SECRETS_DIR}/gitea_oauth2_jwt_secret
+  gitea_metrics_token:
+    file: ${SECRETS_DIR}/gitea_metrics_token
 EOF
 
 # Create Caddyfile for automatic HTTPS

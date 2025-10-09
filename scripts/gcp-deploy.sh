@@ -596,6 +596,11 @@ display_post_deployment() {
     ssh_command=$(terraform output -raw ssh_command 2>/dev/null || echo "N/A")
     gitea_url=$(terraform output -raw gitea_url 2>/dev/null || echo "N/A")
 
+    local admin_username admin_password_secret secrets_enabled
+    admin_username=$(terraform output -raw gitea_admin_username 2>/dev/null || echo "admin")
+    admin_password_secret=$(terraform output -raw admin_password_secret_name 2>/dev/null || echo "gitea-admin-password")
+    secrets_enabled=$(terraform output -raw secret_manager_enabled 2>/dev/null || echo "true")
+
     # Get bucket names
     local evidence_bucket backup_bucket logs_bucket
     evidence_bucket=$(terraform output -raw evidence_bucket_name 2>/dev/null || echo "N/A")
@@ -608,7 +613,15 @@ display_post_deployment() {
     evidence_sa=$(terraform output -raw evidence_service_account_email 2>/dev/null || echo "N/A")
     backup_sa=$(terraform output -raw backup_service_account_email 2>/dev/null || echo "N/A")
 
-    print_color "${GREEN}" "
+    local password_line
+    if [[ "${secrets_enabled}" == "true" ]]; then
+        password_line="Admin Password:   gcloud secrets versions access latest --secret=${admin_password_secret} --project=${PROJECT_ID}"
+    else
+        password_line="Admin Password:   ChangeMe!123456 (Secret Manager disabled)"
+    fi
+
+    local summary
+    summary=$(cat <<EOF
 ╔══════════════════════════════════════════════════════════════════╗
 ║                   DEPLOYMENT SUCCESSFUL                          ║
 ╚══════════════════════════════════════════════════════════════════╝
@@ -619,6 +632,8 @@ Gitea URL:        ${gitea_url}
 External IP:      ${external_ip}
 Internal IP:      ${instance_ip}
 SSH Access:       ${ssh_command}
+Admin User:       ${admin_username}
+${password_line}
 
 📦 STORAGE BUCKETS
 ────────────────────
@@ -653,7 +668,10 @@ View logs:        gcloud compute instances get-serial-port-output gitea-${ENVIRO
 SSH to instance:  ${ssh_command}
 Run backup:       ${SCRIPT_DIR}/gcp-backup.sh -p ${PROJECT_ID} -e ${ENVIRONMENT}
 Check health:     curl -k https://${external_ip}/api/v1/version
-"
+EOF
+    )
+
+    print_color "${GREEN}" "${summary}"
 }
 
 # Generate deployment evidence JSON

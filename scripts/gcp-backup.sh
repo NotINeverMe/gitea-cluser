@@ -211,7 +211,7 @@ init_directories() {
 check_prerequisites() {
     log INFO "Checking prerequisites..."
 
-    local required_commands=("gcloud" "gsutil" "docker" "jq" "tar")
+    local required_commands=("gcloud" "gsutil" "docker" "jq" "tar" "terraform")
 
     for cmd in "${required_commands[@]}"; do
         if ! command -v "${cmd}" &> /dev/null; then
@@ -368,9 +368,11 @@ backup_docker_volumes() {
     local data_paths=(
         "/mnt/gitea-data/gitea"
         "/mnt/gitea-data/postgres"
-        "/mnt/gitea-data/redis"
-        "/mnt/gitea-data/caddy_data"
-        "/mnt/gitea-data/caddy_config"
+        "/mnt/gitea-data/runner"
+        "/mnt/gitea-data/backups"
+        "/mnt/gitea-data/logs"
+        "/mnt/gitea-data/caddy/data"
+        "/mnt/gitea-data/caddy/config"
     )
 
     for data_path in "${data_paths[@]}"; do
@@ -435,7 +437,8 @@ backup_postgres() {
         "${INSTANCE_NAME}:/tmp/postgres_dump_${TIMESTAMP}.sql.gz" \
         "${TEMP_DIR}/" \
         --zone="${ZONE}" \
-        --project="${PROJECT_ID}"
+        --project="${PROJECT_ID}" \
+        --tunnel-through-iap
 
     # Clean up remote
     remote_exec "sudo rm /tmp/postgres_dump_${TIMESTAMP}.sql.gz"
@@ -454,15 +457,16 @@ backup_config() {
         return 0
     fi
 
-    # Create config archive on remote
-    remote_exec "sudo tar czf /tmp/gitea_config_${TIMESTAMP}.tar.gz -C /opt/gitea docker-compose.yml .env config/"
+    # Create config archive on remote (include compose, secrets, and Caddy config)
+    remote_exec "cd /mnt/gitea-data && INCLUDE_ITEMS='docker-compose.yml'; [ -d secrets ] && INCLUDE_ITEMS=\"\${INCLUDE_ITEMS} secrets\"; [ -d caddy ] && INCLUDE_ITEMS=\"\${INCLUDE_ITEMS} caddy\"; sudo tar czf /tmp/gitea_config_${TIMESTAMP}.tar.gz \${INCLUDE_ITEMS}"
 
     # Copy to local temp
     gcloud compute scp \
         "${INSTANCE_NAME}:/tmp/gitea_config_${TIMESTAMP}.tar.gz" \
         "${TEMP_DIR}/" \
         --zone="${ZONE}" \
-        --project="${PROJECT_ID}"
+        --project="${PROJECT_ID}" \
+        --tunnel-through-iap
 
     # Clean up remote
     remote_exec "sudo rm /tmp/gitea_config_${TIMESTAMP}.tar.gz"

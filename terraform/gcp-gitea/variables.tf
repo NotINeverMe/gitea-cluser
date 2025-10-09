@@ -53,6 +53,12 @@ variable "terraform_state_bucket" {
   }
 }
 
+variable "terraform_state_object_prefix" {
+  description = "Object prefix used within the Terraform state bucket"
+  type        = string
+  default     = "terraform/state"
+}
+
 variable "kms_keyring_name" {
   description = "Name of the KMS keyring (created by bootstrap)"
   type        = string
@@ -189,11 +195,28 @@ variable "enable_kms" {
   default     = true
 }
 
+variable "disk_kms_key_id" {
+  description = "Existing KMS key ID to use for disk encryption (overrides auto-created key when provided)"
+  type        = string
+  default     = null
+}
+
+variable "storage_kms_key_id" {
+  description = "Existing KMS key ID to use for storage encryption (overrides auto-created key when provided)"
+  type        = string
+  default     = null
+}
+
 variable "enable_secret_manager" {
   description = "Enable Secret Manager for sensitive credentials"
   type        = bool
   default     = true
 }
+
+# ============================================================================
+# EXISTING BOOTSTRAP ARTIFACTS
+# ============================================================================
+
 
 variable "enable_cloud_armor" {
   description = "Enable Cloud Armor WAF protection"

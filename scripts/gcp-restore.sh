@@ -449,54 +449,69 @@ stop_services() {
     gcloud compute ssh "${INSTANCE_NAME}" \
         --zone="${ZONE}" \
         --project="${PROJECT_ID}" \
-        --command="cd /opt/gitea && sudo docker-compose down" 2>&1 | tee -a "${LOG_FILE}"
+        --tunnel-through-iap \
+        --command="cd /mnt/gitea-data && sudo docker compose down" 2>&1 | tee -a "${LOG_FILE}"
 
     log SUCCESS "Services stopped"
 }
 
-# Restore Docker volumes
+# Restore data directories (bind mounts)
 restore_docker_volumes() {
-    log INFO "Restoring Docker volumes..."
+    log INFO "Restoring data directories..."
 
-    local volumes=("gitea_data" "gitea_postgres" "gitea_redis")
+    local data_paths=(
+        "/mnt/gitea-data/gitea"
+        "/mnt/gitea-data/postgres"
+        "/mnt/gitea-data/runner"
+        "/mnt/gitea-data/backups"
+        "/mnt/gitea-data/logs"
+        "/mnt/gitea-data/caddy/data"
+        "/mnt/gitea-data/caddy/config"
+    )
 
-    for volume in "${volumes[@]}"; do
-        local archive="${TEMP_DIR}/${volume}_*.tar.gz"
+    for data_path in "${data_paths[@]}"; do
+        local dir_name=$(basename "${data_path}")
+        local parent_dir=$(dirname "${data_path}")
+        local archive_pattern="${TEMP_DIR}/${dir_name}_*.tar.gz"
 
-        if ls ${archive} 1> /dev/null 2>&1; then
-            log INFO "Restoring volume: ${volume}"
+        if ls ${archive_pattern} 1> /dev/null 2>&1; then
+            log INFO "Restoring directory: ${data_path}"
 
             if [[ "${DRY_RUN}" == "true" ]]; then
-                log DEBUG "[DRY RUN] Would restore volume: ${volume}"
+                log DEBUG "[DRY RUN] Would restore directory: ${data_path}"
                 continue
             fi
 
-            # Upload archive to instance
             local archive_file
-            archive_file=$(ls ${archive} | head -1)
+            archive_file=$(ls ${archive_pattern} | head -1)
             local remote_file="/tmp/$(basename "${archive_file}")"
 
             gcloud compute scp \
                 "${archive_file}" \
                 "${INSTANCE_NAME}:${remote_file}" \
                 --zone="${ZONE}" \
-                --project="${PROJECT_ID}"
+                --project="${PROJECT_ID}" \
+                --tunnel-through-iap
 
-            # Clear and restore volume
             gcloud compute ssh "${INSTANCE_NAME}" \
                 --zone="${ZONE}" \
                 --project="${PROJECT_ID}" \
+                --tunnel-through-iap \
                 --command="
-                    sudo docker volume rm ${volume} 2>/dev/null || true
-                    sudo docker volume create ${volume}
-                    sudo docker run --rm -v ${volume}:/target -v /tmp:/backup alpine tar xzf /backup/$(basename "${remote_file}") -C /target
-                    sudo rm ${remote_file}
+                    sudo mkdir -p '${parent_dir}'
+                    if [ -d '${data_path}' ]; then
+                        sudo rm -rf '${data_path}.pre-restore' 2>/dev/null || true
+                        sudo mv '${data_path}' '${data_path}.pre-restore'
+                    fi
+                    sudo mkdir -p '${data_path}'
+                    sudo tar xzf '${remote_file}' -C '${data_path}'
+                    sudo rm '${remote_file}'
                 " 2>&1 | tee -a "${LOG_FILE}"
 
             ((COMPONENTS_RESTORED++))
-            log SUCCESS "Volume restored: ${volume}"
+            log SUCCESS "Directory restored: ${data_path}"
         else
-            log WARNING "Volume archive not found: ${volume}"
+            log WARNING "Data archive not found for: ${data_path}"
         fi
     done
 }
@@ -522,15 +537,17 @@ restore_postgres() {
             "${dump_path}" \
             "${INSTANCE_NAME}:${remote_dump}" \
             --zone="${ZONE}" \
-            --project="${PROJECT_ID}"
+            --project="${PROJECT_ID}" \
+            --tunnel-through-iap
 
         # Start only PostgreSQL container
         gcloud compute ssh "${INSTANCE_NAME}" \
             --zone="${ZONE}" \
             --project="${PROJECT_ID}" \
+            --tunnel-through-iap \
             --command="
-                cd /opt/gitea
-                sudo docker-compose up -d postgres
+                cd /mnt/gitea-data
+                sudo docker compose up -d postgres
                 sleep 10
                 gunzip -c ${remote_dump} | sudo docker exec -i gitea-postgres psql -U gitea
                 sudo rm ${remote_dump}
@@ -564,14 +581,17 @@ restore_config() {
             "${archive_path}" \
             "${INSTANCE_NAME}:${remote_archive}" \
             --zone="${ZONE}" \
-            --project="${PROJECT_ID}"
+            --project="${PROJECT_ID}" \
+            --tunnel-through-iap
 
         gcloud compute ssh "${INSTANCE_NAME}" \
             --zone="${ZONE}" \
             --project="${PROJECT_ID}" \
+            --tunnel-through-iap \
             --command="
-                sudo tar xzf ${remote_archive} -C /opt/gitea
-                sudo chown -R 1000:1000 /opt/gitea
+                cd /mnt/gitea-data
+                sudo tar xzf ${remote_archive} -C /mnt/gitea-data
+                sudo chown -R 1000:1000 /mnt/gitea-data
                 sudo rm ${remote_archive}
             " 2>&1 | tee -a "${LOG_FILE}"
 
@@ -594,7 +614,8 @@ start_services() {
     gcloud compute ssh "${INSTANCE_NAME}" \
         --zone="${ZONE}" \
         --project="${PROJECT_ID}" \
-        --command="cd /opt/gitea && sudo docker-compose up -d" 2>&1 | tee -a "${LOG_FILE}"
+        --tunnel-through-iap \
+        --command="cd /mnt/gitea-data && sudo docker compose up -d" 2>&1 | tee -a "${LOG_FILE}"
 
     # Wait for services to start
     sleep 30

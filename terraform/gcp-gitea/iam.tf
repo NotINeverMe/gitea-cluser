@@ -1,6 +1,12 @@
 # IAM Service Accounts and Permissions
 # Minimal privilege principle - only required permissions
 
+locals {
+  terraform_state_bucket = var.terraform_state_bucket
+  disk_kms_key_id        = var.disk_kms_key_id != null ? var.disk_kms_key_id : (var.enable_kms ? try(google_kms_crypto_key.disk_key[0].id, null) : null)
+  storage_kms_key_id     = var.storage_kms_key_id != null ? var.storage_kms_key_id : (var.enable_kms ? try(google_kms_crypto_key.storage_key[0].id, null) : null)
+}
+
 # ============================================================================
 # TERRAFORM DEPLOYER SERVICE ACCOUNT
 # ============================================================================
@@ -118,8 +124,8 @@ resource "google_project_iam_member" "backup_roles" {
 
 # Restrict Terraform deployer to only access state buckets
 resource "google_storage_bucket_iam_member" "terraform_state_access" {
-  count  = var.enable_iam_conditions && var.terraform_state_bucket != "" ? 1 : 0
-  bucket = data.google_storage_bucket.tfstate[0].name
+  count  = var.enable_iam_conditions && local.terraform_state_bucket != "" ? 1 : 0
+  bucket = local.terraform_state_bucket
   role   = "roles/storage.admin"
   member = "serviceAccount:${google_service_account.terraform_deployer.email}"
 
@@ -127,7 +133,7 @@ resource "google_storage_bucket_iam_member" "terraform_state_access" {
     title       = "Terraform State Access Only"
     description = "Allow access only to Terraform state operations"
     expression  = <<-EOT
-      resource.name.startsWith("projects/_/buckets/${data.google_storage_bucket.tfstate[0].name}/objects/terraform/state/")
+      resource.name.startsWith("projects/_/buckets/${local.terraform_state_bucket}/objects/${var.terraform_state_object_prefix}")
     EOT
   }
 }
@@ -138,49 +144,21 @@ resource "google_storage_bucket_iam_member" "terraform_state_access" {
 
 # Grant KMS key access to service accounts
 resource "google_kms_crypto_key_iam_member" "gitea_vm_key_user" {
-  crypto_key_id = data.google_kms_crypto_key.disk.id
+  count         = local.disk_kms_key_id != null ? 1 : 0
+  crypto_key_id = local.disk_kms_key_id
   role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
   member        = "serviceAccount:${google_service_account.gitea_vm.email}"
 }
 
 resource "google_kms_crypto_key_iam_member" "backup_key_user" {
-  crypto_key_id = data.google_kms_crypto_key.storage.id
+  count         = local.storage_kms_key_id != null ? 1 : 0
+  crypto_key_id = local.storage_kms_key_id
   role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
   member        = "serviceAccount:${google_service_account.backup.email}"
 }
 
 # ============================================================================
-# DATA SOURCES
-# ============================================================================
 
-# Reference state bucket from bootstrap
-# Uses var.terraform_state_bucket if provided, otherwise tries to derive from project/environment
-data "google_storage_bucket" "tfstate" {
-  count = var.terraform_state_bucket != "" ? 1 : 0
-  name  = var.terraform_state_bucket
-}
-
-# Reference KMS keys from bootstrap
-# Only create these data sources if KMS is enabled and keyring name is provided
-data "google_kms_crypto_key" "disk" {
-  count    = var.enable_kms && var.kms_keyring_name != "" ? 1 : 0
-  name     = "terraform-state-encryption-key"
-  key_ring = data.google_kms_key_ring.gitea[0].id
-}
-
-data "google_kms_crypto_key" "storage" {
-  count    = var.enable_kms && var.kms_keyring_name != "" ? 1 : 0
-  name     = "configuration-storage-encryption-key"
-  key_ring = data.google_kms_key_ring.gitea[0].id
-}
-
-data "google_kms_key_ring" "gitea" {
-  count    = var.kms_keyring_name != "" ? 1 : 0
-  name     = var.kms_keyring_name != "" ? var.kms_keyring_name : "${var.project_id}-${var.environment}-gitea-keyring"
-  location = var.kms_keyring_location
-}
-
-# ============================================================================
 # OUTPUTS
 # ============================================================================
 
