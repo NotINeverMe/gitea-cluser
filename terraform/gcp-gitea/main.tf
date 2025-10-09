@@ -23,9 +23,13 @@ locals {
   evidence_sa     = "gitea-evidence"
 
   # Secret names
-  admin_password_secret  = "${local.name_prefix}-gitea-admin-password"
-  db_password_secret     = "${local.name_prefix}-postgres-password"
-  runner_token_secret    = "${local.name_prefix}-runner-token"
+  admin_password_secret        = "${local.name_prefix}-gitea-admin-password"
+  db_password_secret           = "${local.name_prefix}-postgres-password"
+  runner_token_secret          = "${local.name_prefix}-runner-token"
+  gitea_secret_key_secret      = "${local.name_prefix}-gitea-secret-key"
+  gitea_internal_token_secret  = "${local.name_prefix}-gitea-internal-token"
+  gitea_oauth2_jwt_secret      = "${local.name_prefix}-gitea-oauth2-jwt-secret"
+  gitea_metrics_token_secret   = "${local.name_prefix}-gitea-metrics-token"
 
   # Common labels for all resources
   common_labels = merge(

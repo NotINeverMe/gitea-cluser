@@ -26,6 +26,26 @@ zone = "us-central1-a"
 environment = "prod"
 
 # ============================================================================
+# BOOTSTRAP RESOURCES (From terraform/gcp-gitea/bootstrap)
+# ============================================================================
+
+# Terraform state bucket name (created by bootstrap)
+# Get this from: cd bootstrap && terraform output state_bucket_name
+# Example: "my-project-prod-gitea-tfstate-abc123def"
+# Leave empty to skip state bucket IAM configuration
+terraform_state_bucket = ""
+
+# KMS keyring name (created by bootstrap)
+# Get this from: cd bootstrap && terraform output kms_keyring_name
+# Example: "my-project-prod-gitea-keyring"
+# Leave empty if not using KMS encryption
+kms_keyring_name = ""
+
+# KMS keyring location
+# Must match the location used in bootstrap
+kms_keyring_location = "us"
+
+# ============================================================================
 # NETWORKING CONFIGURATION
 # ============================================================================
 

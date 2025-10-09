@@ -39,6 +39,33 @@ variable "environment" {
 }
 
 # ============================================================================
+# BOOTSTRAP RESOURCES
+# ============================================================================
+
+variable "terraform_state_bucket" {
+  description = "Name of the GCS bucket for Terraform state (created by bootstrap)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.terraform_state_bucket == "" || can(regex("^[a-z0-9][a-z0-9-_]{1,61}[a-z0-9]$", var.terraform_state_bucket))
+    error_message = "State bucket name must be 3-63 characters, lowercase letters, digits, hyphens, or underscores."
+  }
+}
+
+variable "kms_keyring_name" {
+  description = "Name of the KMS keyring (created by bootstrap)"
+  type        = string
+  default     = ""
+}
+
+variable "kms_keyring_location" {
+  description = "Location of the KMS keyring"
+  type        = string
+  default     = "us"
+}
+
+# ============================================================================
 # NETWORKING
 # ============================================================================
 

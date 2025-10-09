@@ -230,12 +230,55 @@ check_prerequisites() {
 get_instance_info() {
     log INFO "Getting instance information..."
 
-    INSTANCE_NAME="gitea-${ENVIRONMENT}-server"
+    # Try to get instance name from Terraform outputs (preferred method)
+    local terraform_dir="${PROJECT_ROOT}/terraform/gcp-gitea"
+    if [[ -f "${terraform_dir}/terraform.tfstate" ]]; then
+        log DEBUG "Reading instance name from Terraform state..."
+        INSTANCE_NAME=$(cd "${terraform_dir}" && terraform output -raw instance_name 2>/dev/null || echo "")
+
+        if [[ -n "${INSTANCE_NAME}" ]]; then
+            log DEBUG "Found instance from Terraform: ${INSTANCE_NAME}"
+        fi
+    fi
+
+    # Fallback: Search for instance using naming patterns
+    if [[ -z "${INSTANCE_NAME}" ]]; then
+        log DEBUG "Terraform state not available, searching for instance..."
+
+        local patterns=(
+            "${PROJECT_ID}-${ENVIRONMENT}-gitea-vm"
+            "${PROJECT_ID}-*-gitea-vm"
+            "*-${ENVIRONMENT}-gitea-vm"
+            "gitea-${ENVIRONMENT}-server"
+        )
+
+        for pattern in "${patterns[@]}"; do
+            log DEBUG "Trying pattern: ${pattern}"
+            INSTANCE_NAME=$(gcloud compute instances list \
+                --project="${PROJECT_ID}" \
+                --filter="name~'${pattern}' AND zone:${ZONE}" \
+                --format="value(name)" \
+                --limit=1 2>/dev/null || echo "")
+
+            if [[ -n "${INSTANCE_NAME}" ]]; then
+                log DEBUG "Found instance: ${INSTANCE_NAME}"
+                break
+            fi
+        done
+    fi
+
+    if [[ -z "${INSTANCE_NAME}" ]]; then
+        log ERROR "Could not find Gitea instance"
+        log INFO "Available instances:"
+        gcloud compute instances list --project="${PROJECT_ID}" --format="table(name,zone,status)"
+        exit 1
+    fi
 
     # Check instance exists and is running
     local status
     status=$(gcloud compute instances describe "${INSTANCE_NAME}" \
         --zone="${ZONE}" \
+        --project="${PROJECT_ID}" \
         --format="value(status)" 2>/dev/null || echo "NOT_FOUND")
 
     if [[ "${status}" == "NOT_FOUND" ]]; then
@@ -248,15 +291,25 @@ get_instance_info() {
         exit 1
     fi
 
-    # Get backup bucket
-    BACKUP_BUCKET="gitea-${ENVIRONMENT}-backup-${PROJECT_ID}"
+    # Get backup bucket - try Terraform first, then search
+    if [[ -f "${terraform_dir}/terraform.tfstate" ]]; then
+        BACKUP_BUCKET=$(cd "${terraform_dir}" && terraform output -raw backup_bucket_name 2>/dev/null || echo "")
+    fi
 
-    if ! gsutil ls -b "gs://${BACKUP_BUCKET}" &>/dev/null; then
-        log ERROR "Backup bucket not found: gs://${BACKUP_BUCKET}"
+    if [[ -z "${BACKUP_BUCKET}" ]]; then
+        log DEBUG "Searching for backup bucket..."
+        BACKUP_BUCKET=$(gsutil ls -p "${PROJECT_ID}" | grep -E "(backup|backups)" | grep "${PROJECT_ID}" | grep "${ENVIRONMENT}" | head -1 | sed 's|gs://||' | sed 's|/||' || echo "")
+    fi
+
+    if [[ -z "${BACKUP_BUCKET}" ]] || ! gsutil ls -b "gs://${BACKUP_BUCKET}" &>/dev/null; then
+        log ERROR "Backup bucket not found"
+        log INFO "Available buckets:"
+        gsutil ls -p "${PROJECT_ID}"
         exit 1
     fi
 
     log SUCCESS "Instance ${INSTANCE_NAME} is running"
+    log DEBUG "Backup bucket: ${BACKUP_BUCKET}"
 }
 
 # Check recent backups
@@ -293,48 +346,68 @@ remote_exec() {
         return 0
     fi
 
+    # Use IAP tunnel for secure SSH access (OS Login compatible)
     gcloud compute ssh "${INSTANCE_NAME}" \
         --zone="${ZONE}" \
         --project="${PROJECT_ID}" \
+        --tunnel-through-iap \
         --command="${cmd}" 2>&1 | tee -a "${LOG_FILE}"
 }
 
-# Backup Docker volumes
+# Backup bind mount data directories
 backup_docker_volumes() {
     if [[ "${BACKUP_TYPE}" == "config" ]]; then
-        log DEBUG "Skipping Docker volumes for config-only backup"
+        log DEBUG "Skipping data directories for config-only backup"
         return 0
     fi
 
-    log INFO "Backing up Docker volumes..."
+    log INFO "Backing up bind mount data directories..."
 
-    local volumes=("gitea_data" "gitea_postgres" "gitea_redis")
+    # Use bind mount paths instead of Docker volumes
+    # These match the actual deployment in startup-script.sh
+    local data_paths=(
+        "/mnt/gitea-data/gitea"
+        "/mnt/gitea-data/postgres"
+        "/mnt/gitea-data/redis"
+        "/mnt/gitea-data/caddy_data"
+        "/mnt/gitea-data/caddy_config"
+    )
 
-    for volume in "${volumes[@]}"; do
-        log INFO "Backing up volume: ${volume}"
+    for data_path in "${data_paths[@]}"; do
+        local dir_name=$(basename "${data_path}")
+        log INFO "Backing up: ${data_path}"
 
         if [[ "${DRY_RUN}" == "true" ]]; then
-            log DEBUG "[DRY RUN] Would backup volume: ${volume}"
+            log DEBUG "[DRY RUN] Would backup: ${data_path}"
             continue
         fi
 
-        # Create tar archive on remote
-        remote_exec "sudo docker run --rm -v ${volume}:/source:ro -v /tmp:/backup alpine tar czf /backup/${volume}_${TIMESTAMP}.tar.gz -C /source ."
+        # Check if directory exists on remote
+        if ! remote_exec "test -d ${data_path}"; then
+            log WARNING "Directory ${data_path} not found, skipping"
+            continue
+        fi
 
-        # Copy to local temp
+        # Create tar archive on remote using bind mount path
+        log DEBUG "Creating archive: ${dir_name}_${TIMESTAMP}.tar.gz"
+        remote_exec "sudo tar czf /tmp/${dir_name}_${TIMESTAMP}.tar.gz -C ${data_path} ." 2>&1 | tee -a "${LOG_FILE}"
+
+        # Copy to local temp using IAP tunnel if enabled
+        log DEBUG "Copying archive to local system..."
         gcloud compute scp \
-            "${INSTANCE_NAME}:/tmp/${volume}_${TIMESTAMP}.tar.gz" \
+            "${INSTANCE_NAME}:/tmp/${dir_name}_${TIMESTAMP}.tar.gz" \
             "${TEMP_DIR}/" \
             --zone="${ZONE}" \
-            --project="${PROJECT_ID}"
+            --project="${PROJECT_ID}" \
+            --tunnel-through-iap 2>&1 | tee -a "${LOG_FILE}"
 
         # Clean up remote
-        remote_exec "sudo rm /tmp/${volume}_${TIMESTAMP}.tar.gz"
+        remote_exec "sudo rm /tmp/${dir_name}_${TIMESTAMP}.tar.gz"
 
         ((FILES_BACKED_UP++))
     done
 
-    log SUCCESS "Docker volumes backed up"
+    log SUCCESS "Data directories backed up (${FILES_BACKED_UP} files)"
 }
 
 # Backup PostgreSQL database

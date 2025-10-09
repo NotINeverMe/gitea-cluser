@@ -187,9 +187,41 @@ validate_params() {
     fi
 
     ZONE="${REGION}-a"
-    INSTANCE_NAME="gitea-${ENVIRONMENT}-server"
-    BACKUP_BUCKET="gitea-${ENVIRONMENT}-backup-${PROJECT_ID}"
     RESTORE_ID="restore_${ENVIRONMENT}_${TIMESTAMP}"
+
+    # Try to get names from Terraform outputs (preferred method)
+    local terraform_dir="${PROJECT_ROOT}/terraform/gcp-gitea"
+    if [[ -f "${terraform_dir}/terraform.tfstate" ]]; then
+        log DEBUG "Reading instance and bucket names from Terraform state..."
+        INSTANCE_NAME=$(cd "${terraform_dir}" && terraform output -raw instance_name 2>/dev/null || echo "")
+        BACKUP_BUCKET=$(cd "${terraform_dir}" && terraform output -raw backup_bucket_name 2>/dev/null || echo "")
+    fi
+
+    # Fallback: Use naming patterns
+    if [[ -z "${INSTANCE_NAME}" ]]; then
+        INSTANCE_NAME=$(gcloud compute instances list \
+            --project="${PROJECT_ID}" \
+            --filter="name~'${PROJECT_ID}-${ENVIRONMENT}-gitea-vm' AND zone:${ZONE}" \
+            --format="value(name)" \
+            --limit=1 2>/dev/null || echo "")
+    fi
+
+    if [[ -z "${INSTANCE_NAME}" ]]; then
+        # Try old naming convention as fallback
+        INSTANCE_NAME="gitea-${ENVIRONMENT}-server"
+    fi
+
+    if [[ -z "${BACKUP_BUCKET}" ]]; then
+        BACKUP_BUCKET=$(gsutil ls -p "${PROJECT_ID}" | grep -E "(backup|backups)" | grep "${PROJECT_ID}" | grep "${ENVIRONMENT}" | head -1 | sed 's|gs://||' | sed 's|/||' || echo "")
+    fi
+
+    if [[ -z "${BACKUP_BUCKET}" ]]; then
+        # Try old naming convention as fallback
+        BACKUP_BUCKET="gitea-${ENVIRONMENT}-backup-${PROJECT_ID}"
+    fi
+
+    log DEBUG "Instance name: ${INSTANCE_NAME}"
+    log DEBUG "Backup bucket: ${BACKUP_BUCKET}"
 }
 
 # Initialize

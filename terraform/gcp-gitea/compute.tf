@@ -108,6 +108,10 @@ resource "google_compute_instance" "gitea_server" {
         admin_password_secret  = local.admin_password_secret
         db_password_secret     = local.db_password_secret
         runner_token_secret    = local.runner_token_secret
+        gitea_secret_key_secret     = local.gitea_secret_key_secret
+        gitea_internal_token_secret = local.gitea_internal_token_secret
+        gitea_oauth2_jwt_secret     = local.gitea_oauth2_jwt_secret
+        gitea_metrics_token_secret  = local.gitea_metrics_token_secret
         evidence_bucket        = "${local.evidence_bucket}-${random_id.bucket_suffix.hex}"
         backup_bucket          = "${local.backup_bucket}-${random_id.bucket_suffix.hex}"
         logs_bucket            = "${local.logs_bucket}-${random_id.bucket_suffix.hex}"

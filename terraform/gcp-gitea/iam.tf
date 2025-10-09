@@ -118,8 +118,8 @@ resource "google_project_iam_member" "backup_roles" {
 
 # Restrict Terraform deployer to only access state buckets
 resource "google_storage_bucket_iam_member" "terraform_state_access" {
-  count  = var.enable_iam_conditions ? 1 : 0
-  bucket = data.google_storage_bucket.tfstate.name
+  count  = var.enable_iam_conditions && var.terraform_state_bucket != "" ? 1 : 0
+  bucket = data.google_storage_bucket.tfstate[0].name
   role   = "roles/storage.admin"
   member = "serviceAccount:${google_service_account.terraform_deployer.email}"
 
@@ -127,7 +127,7 @@ resource "google_storage_bucket_iam_member" "terraform_state_access" {
     title       = "Terraform State Access Only"
     description = "Allow access only to Terraform state operations"
     expression  = <<-EOT
-      resource.name.startsWith("projects/_/buckets/${data.google_storage_bucket.tfstate.name}/objects/terraform/state/")
+      resource.name.startsWith("projects/_/buckets/${data.google_storage_bucket.tfstate[0].name}/objects/terraform/state/")
     EOT
   }
 }
@@ -154,24 +154,30 @@ resource "google_kms_crypto_key_iam_member" "backup_key_user" {
 # ============================================================================
 
 # Reference state bucket from bootstrap
+# Uses var.terraform_state_bucket if provided, otherwise tries to derive from project/environment
 data "google_storage_bucket" "tfstate" {
-  name = "cui-gitea-prod-gitea-tfstate-f5f2e413"
+  count = var.terraform_state_bucket != "" ? 1 : 0
+  name  = var.terraform_state_bucket
 }
 
 # Reference KMS keys from bootstrap
+# Only create these data sources if KMS is enabled and keyring name is provided
 data "google_kms_crypto_key" "disk" {
+  count    = var.enable_kms && var.kms_keyring_name != "" ? 1 : 0
   name     = "terraform-state-encryption-key"
-  key_ring = data.google_kms_key_ring.gitea.id
+  key_ring = data.google_kms_key_ring.gitea[0].id
 }
 
 data "google_kms_crypto_key" "storage" {
+  count    = var.enable_kms && var.kms_keyring_name != "" ? 1 : 0
   name     = "configuration-storage-encryption-key"
-  key_ring = data.google_kms_key_ring.gitea.id
+  key_ring = data.google_kms_key_ring.gitea[0].id
 }
 
 data "google_kms_key_ring" "gitea" {
-  name     = "cui-gitea-prod-gitea-keyring"
-  location = "us"
+  count    = var.kms_keyring_name != "" ? 1 : 0
+  name     = var.kms_keyring_name != "" ? var.kms_keyring_name : "${var.project_id}-${var.environment}-gitea-keyring"
+  location = var.kms_keyring_location
 }
 
 # ============================================================================

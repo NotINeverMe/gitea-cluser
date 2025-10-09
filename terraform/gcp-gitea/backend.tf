@@ -1,25 +1,38 @@
 # Terraform Backend Configuration
 #
-# This file is AUTO-GENERATED after running bootstrap
-# DO NOT manually create this file before bootstrap completes
+# IMPORTANT: This file contains environment-specific values.
+# For new environments, generate from backend.tf.template
 #
-# To generate this file:
-# 1. Run bootstrap: cd bootstrap && terraform apply
-# 2. Copy output values: terraform output backend_config
-# 3. Create backend.tf with the bucket name from output
+# To generate for a new environment:
+#   sed "s|__STATE_BUCKET_NAME__|$(cd bootstrap && terraform output -raw state_bucket_name)|g" \\
+#     backend.tf.template > backend.tf
+#
+# Current Configuration: Production Environment
+# ==============================================================================
 
 terraform {
   backend "gcs" {
-    bucket = "cui-gitea-prod-gitea-tfstate-f5f2e413"  # Set by bootstrap output
+    # State bucket created by bootstrap
+    bucket = "cui-gitea-prod-gitea-tfstate-f5f2e413"
+
+    # Prefix for this environment (allows multi-environment in same bucket)
     prefix = "terraform/state"
 
-    # Encryption is handled by bucket's default KMS key
-    # State locking is handled by GCS versioning
-    # No credentials needed - uses Application Default Credentials
+    # Encryption: Handled by bucket's default KMS key
+    # State locking: Automatic with GCS versioning
+    # Authentication: Uses Application Default Credentials (gcloud auth)
   }
 }
 
-# After creating this file with correct bucket name:
-# terraform init -migrate-state  # Migrate from local to GCS
-# or
-# terraform init -reconfigure     # Fresh initialization
+# ==============================================================================
+# NOTES
+# ==============================================================================
+#
+# - This backend configuration is for the PRODUCTION environment
+# - Bucket name is from bootstrap terraform output
+# - For dev/staging, use different prefixes or separate buckets
+# - See backend.tf.template for detailed multi-environment setup
+#
+# To migrate state: terraform init -migrate-state
+# To reconfigure: terraform init -reconfigure
+# ==============================================================================
