@@ -59,22 +59,22 @@ fetch_secret_or_fail() {
     local value
 
     if ! value=$(gcloud secrets versions access latest --secret="$secret_name" --project="$PROJECT_ID" 2>/dev/null); then
-        log_error "Failed to retrieve secret '${secret_name}' from Secret Manager"
+        log_error "Failed to retrieve secret '$${secret_name}' from Secret Manager"
         return 1
     fi
 
-    printf "%s" "${value}"
+    printf "%s" "$${value}"
 }
 
 write_secret_file() {
     local name="$1"
     local value="$2"
-    local path="${SECRETS_DIR}/${name}"
+    local path="$${SECRETS_DIR}/$${name}"
 
     umask 077
-    printf "%s" "${value}" > "${path}"
-    chmod 600 "${path}"
-    chown root:root "${path}"
+    printf "%s" "$${value}" > "$${path}"
+    chmod 600 "$${path}"
+    chown root:root "$${path}"
 }
 
 # ============================================================================
@@ -762,15 +762,15 @@ services:
 
 secrets:
   postgres_password:
-    file: ${SECRETS_DIR}/postgres_password
+    file: $${SECRETS_DIR}/postgres_password
   gitea_secret_key:
-    file: ${SECRETS_DIR}/gitea_secret_key
+    file: $${SECRETS_DIR}/gitea_secret_key
   gitea_internal_token:
-    file: ${SECRETS_DIR}/gitea_internal_token
+    file: $${SECRETS_DIR}/gitea_internal_token
   gitea_oauth2_jwt_secret:
-    file: ${SECRETS_DIR}/gitea_oauth2_jwt_secret
+    file: $${SECRETS_DIR}/gitea_oauth2_jwt_secret
   gitea_metrics_token:
-    file: ${SECRETS_DIR}/gitea_metrics_token
+    file: $${SECRETS_DIR}/gitea_metrics_token
 EOF
 
 # Create Caddyfile for automatic HTTPS

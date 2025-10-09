@@ -18,7 +18,4 @@ output "secret_manager_secret_names" {
   value       = local.secret_manager_secret_names
 }
 
-output "secret_manager_enabled" {
-  description = "Indicates whether Secret Manager integration is enabled for the deployment."
-  value       = var.enable_secret_manager
-}
+# Note: secret_manager_enabled output is defined in outputs.tf to keep all outputs centralized
