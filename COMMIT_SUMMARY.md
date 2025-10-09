@@ -117,7 +117,7 @@ service account naming, label validation, KMS configuration, and IAM dependencie
 **Deployment Details:**
 - Project: cui-gitea-prod (1018248415137)
 - Region: us-central1-a
-- Domain: 01ntwkconnx.cui-secure.us
+- Domain: gitea.cui-secure.us
 - State: gs://cui-gitea-prod-gitea-tfstate-f5f2e413
 - Cost: ~$450/month ($5,400/year)
 
@@ -179,7 +179,7 @@ Before marking deployment complete:
 ## Post-Deployment Tasks (For Next Session)
 
 1. **DNS Configuration**
-   - Create A record: `01ntwkconnx.cui-secure.us` → `[EXTERNAL_IP]`
+   - Create A record: `gitea.cui-secure.us` → `[EXTERNAL_IP]`
    - Verify Caddy automatic SSL certificate
 
 2. **Gitea Configuration**

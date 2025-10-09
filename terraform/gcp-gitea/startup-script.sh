@@ -621,7 +621,7 @@ services:
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
     ports:
-      - "443:3000"
+      - "3000:3000"
       - "10001:22"
     depends_on:
       postgres:
@@ -635,6 +635,28 @@ services:
       driver: json-file
       options:
         max-size: "100m"
+        max-file: "10"
+
+  caddy:
+    image: caddy:latest
+    container_name: gitea-caddy
+    restart: always
+    networks:
+      gitea:
+        ipv4_address: 172.20.0.5
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /mnt/gitea-data/caddy/data:/data
+      - /mnt/gitea-data/caddy/config:/config
+      - /mnt/gitea-data/caddy/Caddyfile:/etc/caddy/Caddyfile
+    depends_on:
+      - gitea
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
         max-file: "10"
 
   runner:
@@ -660,6 +682,21 @@ services:
         max-size: "50m"
         max-file: "10"
 EOF
+
+# Create Caddyfile for automatic HTTPS
+mkdir -p /mnt/gitea-data/caddy
+cat > /mnt/gitea-data/caddy/Caddyfile <<CADDYEOF
+$GITEA_DOMAIN {
+    reverse_proxy gitea:3000
+
+    encode gzip
+
+    log {
+        output file /data/access.log
+        format json
+    }
+}
+CADDYEOF
 
 # ============================================================================
 # CREATE SYSTEMD SERVICE

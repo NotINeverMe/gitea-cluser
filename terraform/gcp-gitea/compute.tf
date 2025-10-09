@@ -12,7 +12,7 @@ resource "google_compute_instance" "gitea_server" {
   zone         = var.zone
 
   # Enable deletion protection for production
-  deletion_protection = var.environment == "prod" ? true : false
+  deletion_protection = false  # Temporarily disabled to allow instance replacement
 
   # Minimum CPU platform not supported for e2-standard-8
   # min_cpu_platform = var.cpu_platform

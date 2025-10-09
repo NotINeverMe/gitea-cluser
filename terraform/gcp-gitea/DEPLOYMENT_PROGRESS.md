@@ -3,7 +3,7 @@
 **Date:** 2025-10-08
 **Project:** cui-gitea-prod (1018248415137)
 **Region:** us-central1
-**Domain:** 01ntwkconnx.cui-secure.us
+**Domain:** gitea.cui-secure.us
 
 ## Deployment Session Summary
 
@@ -341,7 +341,7 @@ terraform import 'google_kms_crypto_key.secrets_key[0]' \
    - Review audit logs
 
 4. **Post-Deployment Configuration**
-   - DNS A record: `01ntwkconnx.cui-secure.us` → `[EXTERNAL_IP]`
+   - DNS A record: `gitea.cui-secure.us` → `[EXTERNAL_IP]`
    - Let's Encrypt SSL certificate (automated by Caddy)
    - Create first Gitea repository
    - Configure Actions runner
@@ -426,7 +426,7 @@ terraform import 'google_kms_crypto_key.secrets_key[0]' \
 
 **Critical Context:**
 - Project: cui-gitea-prod (1018248415137)
-- Domain: 01ntwkconnx.cui-secure.us
+- Domain: gitea.cui-secure.us
 - Admin: nmartin@dcg.cui-secure.us
 - All secrets generated and stored in Secret Manager
 - Bootstrap infrastructure fully operational

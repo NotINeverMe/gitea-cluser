@@ -47,3 +47,9 @@ credentials.json
 *.tmp
 *.bak
 *.log
+
+# DNS subproject local env
+dns/.env
+dns/.env.*
+security/.env
+security/.env.*

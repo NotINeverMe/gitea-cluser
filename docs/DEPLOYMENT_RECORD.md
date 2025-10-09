@@ -161,7 +161,7 @@ region = "us-central1"
 zone   = "us-central1-a"
 
 # Domain Configuration
-gitea_domain = "01ntwkconnx.cui-secure.us"
+gitea_domain = "gitea.cui-secure.us"
 
 # Admin Configuration
 gitea_admin_username = "admin"
@@ -376,7 +376,7 @@ Layer 5: Audit & Compliance
 - [x] GCP project created: `cui-gitea-prod`
 - [x] Billing account linked and active
 - [x] Required APIs enabled (9 APIs)
-- [x] DNS configured: `01ntwkconnx.cui-secure.us`
+- [x] DNS configured: `gitea.cui-secure.us`
 - [x] Terraform configurations updated
 - [x] Bootstrap tfvars created
 - [ ] Application Default Credentials set up
@@ -474,12 +474,12 @@ gcloud compute ssh gitea-instance \
 docker compose -f /home/gitea/docker-compose.gcp.yml ps
 
 # Update DNS A record
-# 01ntwkconnx.cui-secure.us -> INSTANCE_IP
+# gitea.cui-secure.us -> INSTANCE_IP
 
 # Wait for SSL certificate (Caddy auto-generates Let's Encrypt)
 
 # Access Gitea
-# https://01ntwkconnx.cui-secure.us
+# https://gitea.cui-secure.us
 
 # Update gitea-runner-token from Gitea UI
 # Settings > Actions > Runners > Create Runner > Copy token

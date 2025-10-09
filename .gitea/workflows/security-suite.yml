@@ -1,0 +1,38 @@
+name: Security Suite (App + Infra)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '0 3 * * *'
+
+jobs:
+  security-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Build security env
+        run: |
+          cp security/.env.example security/.env || true
+          # Optionally inject secrets/URLs via Actions variables/secrets
+          sed -i "s#https://gitea.cui-secure.us#${{ vars.GITEA_URL || 'https://gitea.cui-secure.us' }}#" security/.env || true
+          sed -i "s#https://atlantis.cui-secure.us#${{ vars.ATLANTIS_URL || 'https://atlantis.cui-secure.us' }}#" security/.env || true
+          sed -i "s#https://dashboard.cui-secure.us#${{ vars.DASHBOARD_URL || 'https://dashboard.cui-secure.us' }}#" security/.env || true
+
+      - name: Run security suite (Docker-based)
+        run: make -C security suite
+
+      - name: Upload evidence tarball
+        if: always()
+        run: |
+          ls -la /tmp | sed -n '1,200p'
+          echo "Uploading evidence bundles if present..."
+          for f in /tmp/security-evidence-*.tar.gz; do
+            [ -f "$f" ] && echo "Found $f" || continue
+          done
+        # Artifact upload step can be added based on runner capabilities
+

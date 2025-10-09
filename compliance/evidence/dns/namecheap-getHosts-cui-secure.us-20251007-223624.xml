@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApiResponse Status="OK" xmlns="http://api.namecheap.com/xml.response">
+  <Errors />
+  <Warnings />
+  <RequestedCommand>namecheap.domains.dns.gethosts</RequestedCommand>
+  <CommandResponse Type="namecheap.domains.dns.getHosts">
+    <DomainDNSGetHostsResult Domain="cui-secure.us" EmailType="MX" IsUsingOurDNS="true">
+      <host HostId="440717616" Name="arc-midwatch" Type="A" Address="34.57.30.141" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="444384047" Name="bayou-metal-midwatch" Type="A" Address="34.56.72.25" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="458705567" Name="championssc" Type="A" Address="34.23.73.139" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="445602765" Name="cppcorp-midwatch" Type="A" Address="35.231.1.56" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="448549328" Name="dns" Type="A" Address="34.136.175.12" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="444570576" Name="midwatch-siem" Type="A" Address="34.59.207.107" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="441929023" Name="one-dev" Type="A" Address="35.223.67.154" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="439291243" Name="project-management" Type="A" Address="34.10.85.216" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="439458998" Name="r3-siem" Type="A" Address="35.202.219.59" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="459848971" Name="sigoriantech" Type="A" Address="34.148.145.156" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="461678275" Name="usm-edu" Type="A" Address="35.185.44.96" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="459117406" Name="vipr" Type="A" Address="34.42.61.169" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="454617087" Name="j33rufb5yuja.championssc.cui-secure.us" Type="CNAME" Address="gv-l2f5zveqbliit7.dv.googlehosted.com." MXPref="10" TTL="60" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="454664281" Name="r7juwisfdpso.cpssc" Type="CNAME" Address="gv-j6ngz22byr4ony.dv.googlehosted.com." MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="401580739" Name="01ntwkconnx" Type="MX" Address="SMTP.GOOGLE.COM." MXPref="1" TTL="1799" AssociatedAppTitle="MX" FriendlyName="MX1" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="421286689" Name="arcspecialties" Type="MX" Address="SMTP.GOOGLE.COM." MXPref="1" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="433406947" Name="bayou-metal" Type="MX" Address="SMTP.GOOGLE.COM." MXPref="1" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="454622999" Name="championssc" Type="MX" Address="SMTP.GOOGLE.COM." MXPref="1" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="438461214" Name="cppcorp" Type="MX" Address="SMTP.GOOGLE.COM." MXPref="1" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="454664456" Name="cpssc" Type="MX" Address="SMTP.GOOGLE.COM." MXPref="1" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="401580808" Name="dcg" Type="MX" Address="SMTP.GOOGLE.COM." MXPref="1" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="457609936" Name="sigoriantech" Type="MX" Address="SMTP.GOOGLE.COM." MXPref="1" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="461679348" Name="usm" Type="MX" Address="SMTP.GOOGLE.COM." MXPref="1" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="448549871" Name="_acme-challenge.dns" Type="TXT" Address="2MftIVrFvepR1LD69a3pxcfOFEN2suLDggZEZLbz2Eo" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="401577207" Name="01ntwkconnx" Type="TXT" Address="google-site-verification=ey6gS0ydnGaYXKxXyX31M3PbQIk3MvjwaDcfP6uuJL8" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="421283031" Name="arcspecialties" Type="TXT" Address="google-site-verification=qOVSg3t863WEYILnW_Xg2b1tFUUYhljAke7twqG3I-c" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="433407062" Name="bayou-metal" Type="TXT" Address="google-site-verification=HbHQm_H4q3rBDe26FtdIKJzBKJGRrOhgNbdGnZbJf3M" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="454617085" Name="championssc" Type="TXT" Address="google-site-verification=gQL9ecgeqzkGvIDeiARnxBE8cycKMpqxs91Xy0wSlAs" MXPref="10" TTL="60" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="438459114" Name="cppcorp" Type="TXT" Address="google-site-verification=3PIou3cQrT_9A4ouo9rzxfnjipCtMMYdEjgl_ZPVjhE" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="454664195" Name="cpssc" Type="TXT" Address="google-site-verification=Dbku-eVugu6zUV15OrCpJvrH28CPImLMXLAGOrf0MgM" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="401580150" Name="dcg" Type="TXT" Address="google-site-verification=u1SD749dz3Drl3pjUgZ31y5QsZfNciOEhFf1InFaf9U" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="448548804" Name="dns" Type="TXT" Address="34.136.175.12" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="439282634" Name="project-management" Type="TXT" Address="34.10.85.216" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="437176157" Name="r3-midwatch-0" Type="TXT" Address="34.170.151.115" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="457609707" Name="sigoriantech" Type="TXT" Address="google-site-verification=qXmFbjoiEQIejEUNhqlFV_2cOqfX71wV7JBRYgixYI0" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="461679216" Name="usm" Type="TXT" Address="google-site-verification=0C05LGHYytAJeg3evyCbNSI24a-I_nablzn2pm5B62k" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="462410687" Name="usm" Type="TXT" Address="35.185.44.96" MXPref="10" TTL="1799" AssociatedAppTitle="" FriendlyName="" IsActive="true" IsDDNSEnabled="false" />
+      <host HostId="398356805" Name="@" Type="URL" Address="http://www.cui-secure.us/" MXPref="10" TTL="1800" AssociatedAppTitle="URL Forwarding" FriendlyName="URL Record" IsActive="true" IsDDNSEnabled="false" />
+    </DomainDNSGetHostsResult>
+  </CommandResponse>
+  <Server>Server 1360233664</Server>
+  <GMTTimeDifference>--4:00</GMTTimeDifference>
+  <ExecutionTime>0.208</ExecutionTime>
+</ApiResponse>

@@ -2,7 +2,7 @@
 # Copy this to terraform.tfvars and customize
 
 # GCP Project ID
-project_id = "vipr-dcg"
+project_id = "cui-gitea-prod"
 
 # Region for resources
 region = "us-central1"
