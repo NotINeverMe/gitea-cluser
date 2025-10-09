@@ -599,7 +599,15 @@ display_post_deployment() {
     local admin_username admin_password_secret secrets_enabled
     admin_username=$(terraform output -raw gitea_admin_username 2>/dev/null || echo "admin")
     admin_password_secret=$(terraform output -raw admin_password_secret_name 2>/dev/null || echo "gitea-admin-password")
-    secrets_enabled=$(terraform output -raw secret_manager_enabled 2>/dev/null || echo "true")
+
+    # Parse boolean output properly - terraform output -raw doesn't work with booleans
+    # Use -json and jq, or fall back to checking for "true" string
+    if command -v jq &> /dev/null; then
+        secrets_enabled=$(terraform output -json secret_manager_enabled 2>/dev/null | jq -r '.' 2>/dev/null || echo "true")
+    else
+        # Fallback: use plain output and check for "true" string
+        secrets_enabled=$(terraform output secret_manager_enabled 2>/dev/null | grep -oE "true|false" || echo "true")
+    fi
 
     # Get bucket names
     local evidence_bucket backup_bucket logs_bucket

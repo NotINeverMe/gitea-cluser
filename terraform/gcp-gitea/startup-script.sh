@@ -684,8 +684,8 @@ services:
       - GITEA__metrics__ENABLED=true
       - GITEA__metrics__TOKEN_FILE=/run/secrets/gitea_metrics_token
       - GITEA__actions__ENABLED=true
-      - GITEA__oauth__JWT_SECRET_FILE=/run/secrets/gitea_oauth2_jwt_secret
-      - GITEA__oauth2_client__JWT_SECRET_FILE=/run/secrets/gitea_oauth2_jwt_secret
+      - GITEA__oauth2__ENABLE=true
+      - GITEA__oauth2__JWT_SECRET_FILE=/run/secrets/gitea_oauth2_jwt_secret
     networks:
       gitea:
         ipv4_address: 172.20.0.3
