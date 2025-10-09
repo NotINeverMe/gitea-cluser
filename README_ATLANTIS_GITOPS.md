@@ -220,6 +220,21 @@ make terrascan-scan     # Run Terrascan
 make opa-validate       # Validate OPA policies
 ```
 
+### Security & Infra Validation (App + Infra)
+```bash
+make security-suite     # Full app+infra suite with evidence
+make security-infra     # Infra checks (IaC) + Nmap/testssl pen tests
+make security-dast      # ZAP baseline + Nuclei + deploy validation
+```
+
+### DNS Management Shortcuts
+```bash
+make dns-backup         # Export Namecheap DNS (XML + YAML snapshot)
+make dns-plan           # Diff desired vs live DNS -> evidence
+make dns-apply-dry      # Dry-run Namecheap update (no write)
+CONFIRM_OVERWRITE=1 make dns-apply   # Apply (replaces ALL hosts)
+```
+
 ### Cost Management
 ```bash
 make cost-estimate      # Generate cost estimate

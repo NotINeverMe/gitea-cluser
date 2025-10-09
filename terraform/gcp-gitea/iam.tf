@@ -1,13 +1,19 @@
 # IAM Service Accounts and Permissions
 # Minimal privilege principle - only required permissions
 
+locals {
+  terraform_state_bucket = var.terraform_state_bucket
+  disk_kms_key_id        = var.disk_kms_key_id != null ? var.disk_kms_key_id : (var.enable_kms ? try(google_kms_crypto_key.disk_key[0].id, null) : null)
+  storage_kms_key_id     = var.storage_kms_key_id != null ? var.storage_kms_key_id : (var.enable_kms ? try(google_kms_crypto_key.storage_key[0].id, null) : null)
+}
+
 # ============================================================================
 # TERRAFORM DEPLOYER SERVICE ACCOUNT
 # ============================================================================
 
 # Service account for Terraform deployments (used by CI/CD or operators)
 resource "google_service_account" "terraform_deployer" {
-  account_id   = "${var.project_id}-terraform-deployer"
+  account_id   = "gitea-tf-deploy"
   display_name = "Gitea Terraform Deployer"
   description  = "Service account for deploying Gitea infrastructure via Terraform"
   project      = var.project_id
@@ -38,7 +44,7 @@ resource "google_project_iam_member" "terraform_deployer_roles" {
 
 # Service account for Gitea VM operations
 resource "google_service_account" "gitea_vm" {
-  account_id   = "${var.project_id}-gitea-vm"
+  account_id   = "gitea-vm"
   display_name = "Gitea VM Service Account"
   description  = "Service account for Gitea Compute Engine instance"
   project      = var.project_id
@@ -65,7 +71,7 @@ resource "google_project_iam_member" "gitea_vm_roles" {
 
 # Dedicated service account for evidence collection (compliance automation)
 resource "google_service_account" "evidence_collector" {
-  account_id   = "${var.project_id}-evidence-collector"
+  account_id   = "gitea-evidence-coll"
   display_name = "Evidence Collection Service Account"
   description  = "Service account for automated compliance evidence collection"
   project      = var.project_id
@@ -93,7 +99,7 @@ resource "google_project_iam_member" "evidence_collector_roles" {
 
 # Dedicated service account for backup operations
 resource "google_service_account" "backup" {
-  account_id   = "${var.project_id}-backup"
+  account_id   = "gitea-backup"
   display_name = "Backup Service Account"
   description  = "Service account for automated backup operations"
   project      = var.project_id
@@ -118,8 +124,8 @@ resource "google_project_iam_member" "backup_roles" {
 
 # Restrict Terraform deployer to only access state buckets
 resource "google_storage_bucket_iam_member" "terraform_state_access" {
-  count  = var.enable_iam_conditions ? 1 : 0
-  bucket = data.google_storage_bucket.tfstate.name
+  count  = var.enable_iam_conditions && local.terraform_state_bucket != "" ? 1 : 0
+  bucket = local.terraform_state_bucket
   role   = "roles/storage.admin"
   member = "serviceAccount:${google_service_account.terraform_deployer.email}"
 
@@ -127,7 +133,7 @@ resource "google_storage_bucket_iam_member" "terraform_state_access" {
     title       = "Terraform State Access Only"
     description = "Allow access only to Terraform state operations"
     expression  = <<-EOT
-      resource.name.startsWith("projects/_/buckets/${data.google_storage_bucket.tfstate.name}/objects/terraform/state/")
+      resource.name.startsWith("projects/_/buckets/${local.terraform_state_bucket}/objects/${var.terraform_state_object_prefix}")
     EOT
   }
 }
@@ -138,43 +144,21 @@ resource "google_storage_bucket_iam_member" "terraform_state_access" {
 
 # Grant KMS key access to service accounts
 resource "google_kms_crypto_key_iam_member" "gitea_vm_key_user" {
-  crypto_key_id = data.google_kms_crypto_key.disk.id
+  count         = local.disk_kms_key_id != null ? 1 : 0
+  crypto_key_id = local.disk_kms_key_id
   role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
   member        = "serviceAccount:${google_service_account.gitea_vm.email}"
 }
 
 resource "google_kms_crypto_key_iam_member" "backup_key_user" {
-  crypto_key_id = data.google_kms_crypto_key.storage.id
+  count         = local.storage_kms_key_id != null ? 1 : 0
+  crypto_key_id = local.storage_kms_key_id
   role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
   member        = "serviceAccount:${google_service_account.backup.email}"
 }
 
 # ============================================================================
-# DATA SOURCES
-# ============================================================================
 
-# Reference state bucket from bootstrap
-data "google_storage_bucket" "tfstate" {
-  name = "${var.project_id}-gitea-tfstate-*"  # Match bootstrap pattern
-}
-
-# Reference KMS keys from bootstrap
-data "google_kms_crypto_key" "disk" {
-  name     = "disk-encryption-key"
-  key_ring = data.google_kms_key_ring.gitea.id
-}
-
-data "google_kms_crypto_key" "storage" {
-  name     = "storage-encryption-key"
-  key_ring = data.google_kms_key_ring.gitea.id
-}
-
-data "google_kms_key_ring" "gitea" {
-  name     = "${var.project_id}-gitea-keyring"
-  location = var.region
-}
-
-# ============================================================================
 # OUTPUTS
 # ============================================================================
 

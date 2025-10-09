@@ -30,6 +30,7 @@ The diagrams and supporting artifacts demonstrate compliance with:
 | `data-flow.puml` | PlantUML | PlantUML version of DFD with detailed annotations |
 | `network-topology.mmd` | Mermaid | Docker network architecture with firewall rules and IP addressing |
 | `evidence-flow.mmd` | Mermaid | Evidence collection, storage, and compliance lifecycle |
+| `drawio/*.drawio` | Draw.io | Draw.io-compatible wrappers embedding the Mermaid source for collaborative editing |
 
 ### Supporting Documentation
 

@@ -11,7 +11,7 @@ resource "google_kms_key_ring" "gitea_keyring" {
   count = var.enable_kms ? 1 : 0
 
   name     = "${local.name_prefix}-keyring"
-  location = var.region
+  location = var.region  # Use regional to match GCS bucket location
 }
 
 # Crypto key for disk encryption - SC.L2-3.13.16: Information at Rest
@@ -34,8 +34,8 @@ resource "google_kms_crypto_key" "disk_key" {
   # Labels for compliance tracking
   labels = merge(local.common_labels, {
     "purpose"      = "disk-encryption"
-    "cmmc-control" = "SC.L2-3.13.11"
-    "nist-control" = "SC.L2-3.13.16"
+    "cmmc-control" = "sc-l2-3-13-11"
+    "nist-control" = "sc-l2-3-13-16"
   })
 
   lifecycle {
@@ -60,7 +60,7 @@ resource "google_kms_crypto_key" "storage_key" {
 
   labels = merge(local.common_labels, {
     "purpose"      = "storage-encryption"
-    "cmmc-control" = "SC.L2-3.13.11"
+    "cmmc-control" = "sc-l2-3-13-11"
   })
 
   lifecycle {
@@ -85,7 +85,7 @@ resource "google_kms_crypto_key" "secrets_key" {
 
   labels = merge(local.common_labels, {
     "purpose"      = "secrets-encryption"
-    "cmmc-control" = "SC.L2-3.13.11"
+    "cmmc-control" = "sc-l2-3-13-11"
   })
 
   lifecycle {
@@ -113,7 +113,7 @@ resource "google_service_account" "evidence_sa" {
 
 # Service account for backup operations
 resource "google_service_account" "backup_sa" {
-  account_id   = "${local.name_prefix}-backup-sa"
+  account_id   = "gitea-backup-sa"
   display_name = "Backup Service Account"
   description  = "Service account for automated backup operations"
 }
@@ -130,7 +130,7 @@ resource "google_secret_manager_secret" "admin_password" {
 
   labels = merge(local.common_labels, {
     "purpose"      = "gitea-admin"
-    "cmmc-control" = "IA.L2-3.5.7"
+    "cmmc-control" = "ia-l2-3-5-7"
   })
 
   replication {
@@ -138,12 +138,13 @@ resource "google_secret_manager_secret" "admin_password" {
       replicas {
         location = var.region
 
-        dynamic "customer_managed_encryption" {
-          for_each = var.enable_kms ? [1] : []
-          content {
-            kms_key_name = google_kms_crypto_key.secrets_key[0].id
-          }
-        }
+        # CMEK encryption disabled - requires service identity setup
+        # dynamic "customer_managed_encryption" {
+        #   for_each = var.enable_kms ? [1] : []
+        #   content {
+        #     kms_key_name = google_kms_crypto_key.secrets_key[0].id
+        #   }
+        # }
       }
     }
   }
@@ -173,7 +174,7 @@ resource "google_secret_manager_secret" "db_password" {
 
   labels = merge(local.common_labels, {
     "purpose"      = "postgres-db"
-    "cmmc-control" = "IA.L2-3.5.7"
+    "cmmc-control" = "ia-l2-3-5-7"
   })
 
   replication {
@@ -181,12 +182,13 @@ resource "google_secret_manager_secret" "db_password" {
       replicas {
         location = var.region
 
-        dynamic "customer_managed_encryption" {
-          for_each = var.enable_kms ? [1] : []
-          content {
-            kms_key_name = google_kms_crypto_key.secrets_key[0].id
-          }
-        }
+        # CMEK encryption disabled - requires service identity setup
+        # dynamic "customer_managed_encryption" {
+        #   for_each = var.enable_kms ? [1] : []
+        #   content {
+        #     kms_key_name = google_kms_crypto_key.secrets_key[0].id
+        #   }
+        # }
       }
     }
   }
@@ -204,6 +206,130 @@ resource "google_secret_manager_secret_version" "db_password_version" {
   }
 }
 
+# Secret for Gitea application secret key
+resource "google_secret_manager_secret" "gitea_secret_key" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = local.gitea_secret_key_secret
+
+  labels = merge(local.common_labels, {
+    "purpose"      = "gitea-secret-key"
+    "cmmc-control" = "ia-l2-3-5-1"
+  })
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+}
+
+resource "google_secret_manager_secret_version" "gitea_secret_key_version" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret      = google_secret_manager_secret.gitea_secret_key[0].id
+  secret_data = random_password.gitea_secret_key.result
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
+# Secret for Gitea internal token
+resource "google_secret_manager_secret" "gitea_internal_token" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = local.gitea_internal_token_secret
+
+  labels = merge(local.common_labels, {
+    "purpose"      = "gitea-internal-token"
+    "cmmc-control" = "ia-l2-3-5-1"
+  })
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+}
+
+resource "google_secret_manager_secret_version" "gitea_internal_token_version" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret      = google_secret_manager_secret.gitea_internal_token[0].id
+  secret_data = random_password.gitea_internal_token.result
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
+# Secret for Gitea OAuth2 JWT secret
+resource "google_secret_manager_secret" "gitea_oauth2_jwt_secret" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = local.gitea_oauth2_jwt_secret
+
+  labels = merge(local.common_labels, {
+    "purpose"      = "gitea-oauth2-jwt"
+    "cmmc-control" = "ia-l2-3-5-1"
+  })
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+}
+
+resource "google_secret_manager_secret_version" "gitea_oauth2_jwt_secret_version" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret      = google_secret_manager_secret.gitea_oauth2_jwt_secret[0].id
+  secret_data = random_password.gitea_oauth2_jwt_secret.result
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
+# Secret for Gitea metrics token
+resource "google_secret_manager_secret" "gitea_metrics_token" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = local.gitea_metrics_token_secret
+
+  labels = merge(local.common_labels, {
+    "purpose"      = "gitea-metrics-token"
+    "cmmc-control" = "ia-l2-3-5-1"
+  })
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+}
+
+resource "google_secret_manager_secret_version" "gitea_metrics_token_version" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret      = google_secret_manager_secret.gitea_metrics_token[0].id
+  secret_data = random_password.gitea_metrics_token.result
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
 # Secret for Gitea runner token
 resource "google_secret_manager_secret" "runner_token" {
   count = var.enable_secret_manager ? 1 : 0
@@ -212,7 +338,7 @@ resource "google_secret_manager_secret" "runner_token" {
 
   labels = merge(local.common_labels, {
     "purpose"      = "gitea-runner"
-    "cmmc-control" = "IA.L2-3.5.1"
+    "cmmc-control" = "ia-l2-3-5-1"
   })
 
   replication {
@@ -220,18 +346,39 @@ resource "google_secret_manager_secret" "runner_token" {
       replicas {
         location = var.region
 
-        dynamic "customer_managed_encryption" {
-          for_each = var.enable_kms ? [1] : []
-          content {
-            kms_key_name = google_kms_crypto_key.secrets_key[0].id
-          }
-        }
+        # CMEK encryption disabled - requires service identity setup
+        # dynamic "customer_managed_encryption" {
+        #   for_each = var.enable_kms ? [1] : []
+        #   content {
+        #     kms_key_name = google_kms_crypto_key.secrets_key[0].id
+        #   }
+        # }
       }
     }
   }
 }
 
 # Generate random runner token
+resource "random_password" "gitea_secret_key" {
+  length  = 64
+  special = true
+}
+
+resource "random_password" "gitea_internal_token" {
+  length  = 64
+  special = false
+}
+
+resource "random_password" "gitea_oauth2_jwt_secret" {
+  length  = 64
+  special = false
+}
+
+resource "random_password" "gitea_metrics_token" {
+  length  = 48
+  special = false
+}
+
 resource "random_password" "runner_token" {
   length  = 40
   special = false  # Alphanumeric only for runner token
@@ -296,10 +443,10 @@ resource "google_project_iam_member" "backup_sa_roles" {
 
 # KMS key IAM bindings
 resource "google_kms_crypto_key_iam_member" "disk_key_users" {
-  for_each = var.enable_kms ? toset([
-    google_service_account.gitea_sa.email,
-    "serviceAccount:service-${data.google_project.current.number}@compute-system.iam.gserviceaccount.com",
-  ]) : toset([])
+  for_each = var.enable_kms ? tomap({
+    "gitea-sa"        = google_service_account.gitea_sa.email,
+    "compute-service" = "service-${data.google_project.current.number}@compute-system.iam.gserviceaccount.com",
+  }) : tomap({})
 
   crypto_key_id = google_kms_crypto_key.disk_key[0].id
   role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
@@ -307,12 +454,12 @@ resource "google_kms_crypto_key_iam_member" "disk_key_users" {
 }
 
 resource "google_kms_crypto_key_iam_member" "storage_key_users" {
-  for_each = var.enable_kms ? toset([
-    google_service_account.gitea_sa.email,
-    google_service_account.evidence_sa.email,
-    google_service_account.backup_sa.email,
-    "serviceAccount:service-${data.google_project.current.number}@gs-project-accounts.iam.gserviceaccount.com",
-  ]) : toset([])
+  for_each = var.enable_kms ? tomap({
+    "gitea-sa"        = google_service_account.gitea_sa.email,
+    "evidence-sa"     = google_service_account.evidence_sa.email,
+    "backup-sa"       = google_service_account.backup_sa.email,
+    "storage-service" = "service-${data.google_project.current.number}@gs-project-accounts.iam.gserviceaccount.com",
+  }) : tomap({})
 
   crypto_key_id = google_kms_crypto_key.storage_key[0].id
   role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
@@ -340,6 +487,38 @@ resource "google_secret_manager_secret_iam_member" "runner_token_access" {
   count = var.enable_secret_manager ? 1 : 0
 
   secret_id = google_secret_manager_secret.runner_token[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.gitea_sa.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "gitea_secret_key_access" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = google_secret_manager_secret.gitea_secret_key[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.gitea_sa.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "gitea_internal_token_access" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = google_secret_manager_secret.gitea_internal_token[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.gitea_sa.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "gitea_oauth2_jwt_secret_access" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = google_secret_manager_secret.gitea_oauth2_jwt_secret[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.gitea_sa.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "gitea_metrics_token_access" {
+  count = var.enable_secret_manager ? 1 : 0
+
+  secret_id = google_secret_manager_secret.gitea_metrics_token[0].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.gitea_sa.email}"
 }

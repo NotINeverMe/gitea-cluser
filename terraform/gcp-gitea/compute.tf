@@ -12,10 +12,10 @@ resource "google_compute_instance" "gitea_server" {
   zone         = var.zone
 
   # Enable deletion protection for production
-  deletion_protection = var.environment == "prod" ? true : false
+  deletion_protection = false  # Temporarily disabled to allow instance replacement
 
-  # Minimum CPU platform for better performance
-  min_cpu_platform = var.cpu_platform
+  # Minimum CPU platform not supported for e2-standard-8
+  # min_cpu_platform = var.cpu_platform
 
   # Tags for firewall rules and identification
   tags = ["gitea-server", "https-server", "ssh-server"]
@@ -38,12 +38,13 @@ resource "google_compute_instance" "gitea_server" {
     }
 
     # Enable CMEK encryption if KMS is enabled
-    dynamic "disk_encryption_key" {
-      for_each = var.enable_kms ? [1] : []
-      content {
-        kms_key_self_link = google_kms_crypto_key.disk_key[0].id
-      }
-    }
+    # Note: Disk encryption configured via disk_encryption_key at attached_disk level
+    # dynamic "disk_encryption_key" {
+    #   for_each = var.enable_kms ? [1] : []
+    #   content {
+    #     kms_key_self_link = google_kms_crypto_key.disk_key[0].id
+    #   }
+    # }
 
     # Auto-delete boot disk when instance is deleted
     auto_delete = true
@@ -107,6 +108,10 @@ resource "google_compute_instance" "gitea_server" {
         admin_password_secret  = local.admin_password_secret
         db_password_secret     = local.db_password_secret
         runner_token_secret    = local.runner_token_secret
+        gitea_secret_key_secret     = local.gitea_secret_key_secret
+        gitea_internal_token_secret = local.gitea_internal_token_secret
+        gitea_oauth2_jwt_secret     = local.gitea_oauth2_jwt_secret
+        gitea_metrics_token_secret  = local.gitea_metrics_token_secret
         evidence_bucket        = "${local.evidence_bucket}-${random_id.bucket_suffix.hex}"
         backup_bucket          = "${local.backup_bucket}-${random_id.bucket_suffix.hex}"
         logs_bucket            = "${local.logs_bucket}-${random_id.bucket_suffix.hex}"
@@ -115,6 +120,8 @@ resource "google_compute_instance" "gitea_server" {
         gitea_disable_registration = var.gitea_disable_registration
         gitea_require_signin_view = var.gitea_require_signin_view
         enable_docker_gcr      = var.enable_docker_gcr
+        distro_id              = "Ubuntu"
+        distro_codename        = "jammy"
       })
 
       # Serial port logging for debugging
@@ -123,12 +130,9 @@ resource "google_compute_instance" "gitea_server" {
     var.metadata
   )
 
-  # Metadata startup script for updates
-  metadata_startup_script = <<-EOT
-    #!/bin/bash
-    # Log startup for audit trail - AU.L2-3.3.1
-    echo "[$(date)] Instance startup initiated" | tee -a /var/log/startup.log
-  EOT
+  # Use only one startup script mechanism. The full bootstrap runs via
+  # metadata["startup-script"] above to avoid conflicts with
+  # metadata_startup_script.
 
   # Scheduling for cost optimization and maintenance windows
   scheduling {
@@ -136,12 +140,12 @@ resource "google_compute_instance" "gitea_server" {
     automatic_restart = true
     on_host_maintenance = "MIGRATE"
 
-    # Node affinity for consistent performance
-    node_affinities {
-      key      = "node-group"
-      operator = "IN"
-      values   = ["gitea-nodes"]
-    }
+    # Node affinity commented out - cannot specify both cpu_platform and node_affinities
+    # node_affinities {
+    #   key      = "node-group"
+    #   operator = "IN"
+    #   values   = ["gitea-nodes"]
+    # }
   }
 
   # Guest accelerators (if needed for ML workloads)

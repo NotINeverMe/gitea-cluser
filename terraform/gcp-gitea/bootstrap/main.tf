@@ -160,7 +160,9 @@ resource "google_storage_bucket" "tfstate" {
 }
 
 # IAM binding for state bucket - only allow specific service account
+# Only create if terraform_sa_email is provided
 resource "google_storage_bucket_iam_member" "tfstate_admin" {
+  count  = var.terraform_sa_email != "" ? 1 : 0
   bucket = google_storage_bucket.tfstate.name
   role   = "roles/storage.admin"
   member = "serviceAccount:${var.terraform_sa_email}"
@@ -282,7 +284,6 @@ resource "local_file" "bootstrap_evidence" {
 
   content = jsonencode({
     bootstrap_timestamp = timestamp()
-    terraform_version   = terraform.version
     project_id          = var.project_id
     environment         = var.environment
 

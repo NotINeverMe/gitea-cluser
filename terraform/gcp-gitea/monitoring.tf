@@ -19,7 +19,7 @@ resource "google_monitoring_notification_channel" "email" {
 
   user_labels = merge(local.common_labels, {
     "purpose"      = "alerts"
-    "cmmc-control" = "SI.L2-3.14.1"
+    "cmmc-control" = "si-l2-3-14-1"
   })
 }
 
@@ -105,7 +105,7 @@ resource "google_monitoring_uptime_check_config" "gitea_https" {
 
   user_labels = merge(local.common_labels, {
     "service"      = "gitea"
-    "cmmc-control" = "SI.L2-3.14.2"
+    "cmmc-control" = "si-l2-3-14-2"
   })
 }
 
@@ -178,15 +178,15 @@ resource "google_monitoring_alert_policy" "instance_down" {
 
   user_labels = merge(local.common_labels, {
     "severity"     = "critical"
-    "cmmc-control" = "SI.L2-3.14.3"
+    "cmmc-control" = "si-l2-3-14-3"
   })
 
   alert_strategy {
     auto_close = "604800s"  # 7 days
 
-    rate_limit {
-      period = "900s"  # 15 minutes
-    }
+#     rate_limit {
+#       period = "900s"  # 15 minutes
+#     }
   }
 }
 
@@ -379,7 +379,7 @@ resource "google_monitoring_alert_policy" "uptime_failure" {
 
   user_labels = merge(local.common_labels, {
     "severity"     = "critical"
-    "cmmc-control" = "SI.L2-3.14.1"
+    "cmmc-control" = "si-l2-3-14-1"
   })
 
   alert_strategy {
@@ -389,7 +389,7 @@ resource "google_monitoring_alert_policy" "uptime_failure" {
 
 # Alert for security events (failed SSH attempts)
 resource "google_monitoring_alert_policy" "security_ssh" {
-  count = var.enable_monitoring ? 1 : 0
+  count = 0  # Disabled - requires log-based metric to be created first
 
   display_name = "${local.name_prefix}-security-ssh-attempts"
   combiner     = "OR"
@@ -399,10 +399,10 @@ resource "google_monitoring_alert_policy" "security_ssh" {
     display_name = "Multiple failed SSH attempts"
 
     condition_threshold {
+      # Use log-based metric instead of regex filter (=~ not supported)
       filter = join(" AND ", [
         "resource.type = \"gce_instance\"",
-        "log_id(\"syslog\")",
-        "textPayload =~ \"Failed password.*ssh\""
+        "metric.type = \"logging.googleapis.com/user/ssh_failed_attempts\""
       ])
       duration        = "60s"
       comparison      = "COMPARISON_GT"
@@ -427,7 +427,7 @@ resource "google_monitoring_alert_policy" "security_ssh" {
   user_labels = merge(local.common_labels, {
     "severity"     = "high"
     "type"         = "security"
-    "cmmc-control" = "AU.L2-3.3.1"
+    "cmmc-control" = "au-l2-3-3-1"
   })
 }
 

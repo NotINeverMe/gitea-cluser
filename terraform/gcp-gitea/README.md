@@ -116,9 +116,11 @@ This Terraform module deploys a production-ready, security-hardened Gitea instan
    # Edit terraform.tfvars with your values
    ```
 
-3. **Initialize Terraform**:
+3. **Initialize Terraform** (pass backend coordinates from bootstrap outputs):
    ```bash
-   terraform init
+   terraform init \
+     -backend-config="bucket=$(cd ../bootstrap 2>/dev/null && terraform output -raw state_bucket_name)" \
+     -backend-config="prefix=envs/prod"
    ```
 
 4. **Review the plan**:
@@ -130,6 +132,22 @@ This Terraform module deploys a production-ready, security-hardened Gitea instan
    ```bash
    terraform apply
    ```
+
+### If You See KMS/CMEK or Metadata Conflicts
+
+- Error: Cannot provide both `metadata_startup_script` and `metadata.startup-script`
+  - The module uses only `metadata["startup-script"]`. Ensure no `metadata_startup_script` blocks are present in your overrides. Current module code has removed it (compute.tf: metadata template only).
+
+- Error: `cloudkms.cryptoKeyVersions.useToEncrypt` denied
+  - This typically occurs when keys pre-exist or IAM bindings are not yet applied. Import existing keys, then re-apply:
+  ```bash
+  # From terraform/gcp-gitea directory
+  PROJECT_ID=your-proj REGION=us-central1 ENV=prod ./scripts/kms-import.sh
+  terraform plan -out=tfplan
+  terraform apply -auto-approve tfplan
+  ```
+  - Ensure the Compute Engine Service Agent and service accounts have `roles/cloudkms.cryptoKeyEncrypterDecrypter` (module config handles this in security.tf).
+
 
 6. **Access Gitea**:
    - Get the external IP: `terraform output instance_external_ip`
@@ -206,23 +224,14 @@ gcloud compute ssh --zone=us-central1-a gitea-vm --project=PROJECT_ID --tunnel-t
 ### Backup Management
 
 ```bash
-# Manual backup
-ssh gitea-vm
-sudo /usr/local/bin/gitea-backup.sh
+# Run backup via automation script
+./scripts/gcp-backup.sh -p PROJECT_ID -e prod
 
 # List backups in GCS
 gsutil ls gs://BACKUP_BUCKET/
 
 # Restore from backup
-# 1. Stop Gitea
-docker-compose -f /mnt/gitea-data/docker-compose.yml down
-
-# 2. Restore data
-gsutil cp gs://BACKUP_BUCKET/daily/backup.tar.gz /tmp/
-tar -xzf /tmp/backup.tar.gz -C /mnt/gitea-data/
-
-# 3. Start Gitea
-docker-compose -f /mnt/gitea-data/docker-compose.yml up -d
+./scripts/gcp-restore.sh -p PROJECT_ID -e prod -b BACKUP_ID
 ```
 
 ### Monitoring
@@ -242,6 +251,10 @@ gcloud logging read 'resource.type="gce_instance"' --project=PROJECT_ID --limit=
 ```bash
 # List secrets
 gcloud secrets list --project=PROJECT_ID
+
+# Retrieve current Gitea admin password
+secret_name=$(terraform output -raw admin_password_secret_name)
+gcloud secrets versions access latest --secret="${secret_name}" --project=PROJECT_ID
 
 # Update admin password
 gcloud secrets versions add admin-password --data-file=- --project=PROJECT_ID

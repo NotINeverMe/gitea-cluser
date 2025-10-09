@@ -39,6 +39,39 @@ variable "environment" {
 }
 
 # ============================================================================
+# BOOTSTRAP RESOURCES
+# ============================================================================
+
+variable "terraform_state_bucket" {
+  description = "Name of the GCS bucket for Terraform state (created by bootstrap)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.terraform_state_bucket == "" || can(regex("^[a-z0-9][a-z0-9-_]{1,61}[a-z0-9]$", var.terraform_state_bucket))
+    error_message = "State bucket name must be 3-63 characters, lowercase letters, digits, hyphens, or underscores."
+  }
+}
+
+variable "terraform_state_object_prefix" {
+  description = "Object prefix used within the Terraform state bucket"
+  type        = string
+  default     = "terraform/state"
+}
+
+variable "kms_keyring_name" {
+  description = "Name of the KMS keyring (created by bootstrap)"
+  type        = string
+  default     = ""
+}
+
+variable "kms_keyring_location" {
+  description = "Location of the KMS keyring"
+  type        = string
+  default     = "us"
+}
+
+# ============================================================================
 # NETWORKING
 # ============================================================================
 
@@ -162,11 +195,28 @@ variable "enable_kms" {
   default     = true
 }
 
+variable "disk_kms_key_id" {
+  description = "Existing KMS key ID to use for disk encryption (overrides auto-created key when provided)"
+  type        = string
+  default     = null
+}
+
+variable "storage_kms_key_id" {
+  description = "Existing KMS key ID to use for storage encryption (overrides auto-created key when provided)"
+  type        = string
+  default     = null
+}
+
 variable "enable_secret_manager" {
   description = "Enable Secret Manager for sensitive credentials"
   type        = bool
   default     = true
 }
+
+# ============================================================================
+# EXISTING BOOTSTRAP ARTIFACTS
+# ============================================================================
+
 
 variable "enable_cloud_armor" {
   description = "Enable Cloud Armor WAF protection"
@@ -345,4 +395,10 @@ variable "metadata" {
   description = "Additional instance metadata"
   type        = map(string)
   default     = {}
+}
+
+variable "enable_iam_conditions" {
+  description = "Enable IAM conditions for enhanced security"
+  type        = bool
+  default     = false
 }

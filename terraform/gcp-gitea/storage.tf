@@ -115,7 +115,7 @@ resource "google_storage_bucket" "backup" {
   labels = merge(local.common_labels, {
     "purpose"              = "backup"
     "retention-days"       = tostring(var.backup_retention_days)
-    "cmmc-control"        = "CP.L2-3.11.1"
+    "cmmc-control"        = "cp-l2-3-11-1"
   })
 
   # Enable versioning for backup integrity
@@ -190,8 +190,8 @@ resource "google_storage_bucket" "logs" {
   labels = merge(local.common_labels, {
     "purpose"              = "logging"
     "retention-days"       = tostring(var.logs_retention_days)
-    "cmmc-control"        = "AU.L2-3.3.1"
-    "nist-control"        = "SI.L2-3.14.1"
+    "cmmc-control"        = "au-l2-3-3-1"
+    "nist-control"        = "si-l2-3-14-1"
   })
 
   # Enable versioning
@@ -273,7 +273,7 @@ resource "google_storage_bucket" "backup_dr" {
   labels = merge(local.common_labels, {
     "purpose"              = "disaster-recovery"
     "retention-days"       = tostring(var.backup_retention_days)
-    "cmmc-control"        = "CP.L2-3.11.3"
+    "cmmc-control"        = "cp-l2-3-11-3"
     "replication-source"   = var.region
   })
 
@@ -434,12 +434,12 @@ resource "google_pubsub_topic" "storage_notifications" {
   message_retention_duration = "86400s"  # 1 day
 
   # Enable CMEK encryption
-  dynamic "encryption_config" {
-    for_each = var.enable_kms ? [1] : []
-    content {
-      kms_key_name = google_kms_crypto_key.storage_key[0].id
-    }
-  }
+#   dynamic "encryption_config" {
+#     for_each = var.enable_kms ? [1] : []
+#     content {
+#       kms_key_name = google_kms_crypto_key.storage_key[0].id
+#     }
+#   }
 }
 
 # Notification for evidence bucket

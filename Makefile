@@ -31,6 +31,15 @@ help: ## Show this help message
 	@echo "Variables:"
 	@echo "  $(YELLOW)PROJECT_ID$(NC)    GCP Project ID (current: $(PROJECT_ID))"
 	@echo "  $(YELLOW)ENVIRONMENT$(NC)   Target environment (current: $(ENVIRONMENT))"
+	@echo ""
+	@echo "Security shortcuts:"
+	@echo "  $(GREEN)security-suite$(NC)        Run full app+infra security suite (evidence)"
+	@echo "  $(GREEN)security-infra$(NC)        Run infra checks + pen tests"
+	@echo "  $(GREEN)security-dast$(NC)         Run ZAP + Nuclei + validation"
+	@echo "  $(GREEN)dns-backup$(NC)            Backup Namecheap DNS (evidence)"
+	@echo "  $(GREEN)dns-plan$(NC)              Diff desired vs live DNS"
+	@echo "  $(GREEN)dns-apply-dry$(NC)         Dry-run Namecheap update"
+	@echo "  $(GREEN)dns-apply$(NC)             Apply Namecheap update (danger)"
 
 # ===== SETUP TARGETS =====
 
@@ -331,6 +340,32 @@ monitoring-compliance: ## Generate monitoring compliance report
 		jq -r '.data.result[0].value[1] // "N/A"' >> compliance/evidence/reports/monitoring-report-$(TIMESTAMP).txt 2>/dev/null || echo "N/A" >> compliance/evidence/reports/monitoring-report-$(TIMESTAMP).txt
 	@echo "" >> compliance/evidence/reports/monitoring-report-$(TIMESTAMP).txt
 	@echo "Evidence collected at: compliance/evidence/reports/monitoring-report-$(TIMESTAMP).txt"
+
+# ===== SECURITY SHORTCUTS =====
+
+security-suite: ## Run full security suite and package evidence
+	@$(MAKE) -C security suite
+
+security-infra: ## Infra checks + infra pen tests
+	@$(MAKE) -C security infra
+
+security-dast: ## DAST + deployment validation
+	@$(MAKE) -C security dast
+	@$(MAKE) -C security validate
+
+# ===== DNS SHORTCUTS =====
+
+dns-backup: ## Export live DNS (getHosts) -> evidence + snapshot
+	@$(MAKE) -C dns backup
+
+dns-plan: ## Diff: desired.records vs live DNS -> evidence diff
+	@$(MAKE) -C dns plan
+
+dns-apply-dry: ## Dry-run Namecheap update
+	@$(MAKE) -C dns apply-dry
+
+dns-apply: ## Apply Namecheap update (REPLACES ALL HOSTS) requires CONFIRM_OVERWRITE=1
+	@$(MAKE) -C dns apply CONFIRM_OVERWRITE=$(CONFIRM_OVERWRITE)
 
 # Default target
 .DEFAULT_GOAL := help

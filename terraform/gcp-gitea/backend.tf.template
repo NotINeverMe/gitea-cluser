@@ -1,25 +1,66 @@
-# Terraform Backend Configuration
+# Terraform Backend Configuration Template
 #
-# This file is AUTO-GENERATED after running bootstrap
-# DO NOT manually create this file before bootstrap completes
+# IMPORTANT: Terraform backend blocks do NOT support variables or expressions.
+# This template must be filled in with actual values before use.
 #
-# To generate this file:
-# 1. Run bootstrap: cd bootstrap && terraform apply
-# 2. Copy output values: terraform output backend_config
-# 3. Create backend.tf with the bucket name from output
+# ==============================================================================
+# SETUP INSTRUCTIONS
+# ==============================================================================
+#
+# Option 1: Use Bootstrap Outputs (Recommended)
+# ----------------------------------------------
+# 1. Run bootstrap to create state bucket and KMS keys:
+#    cd terraform/gcp-gitea/bootstrap
+#    terraform init
+#    terraform apply
+#
+# 2. Get the state bucket name from bootstrap outputs:
+#    terraform output state_bucket_name
+#    # Example output: cui-gitea-prod-gitea-tfstate-f5f2e413
+#
+# 3. Copy this template to backend.tf and replace __STATE_BUCKET_NAME__:
+#    sed "s|__STATE_BUCKET_NAME__|$(cd bootstrap && terraform output -raw state_bucket_name)|g" backend.tf.template > backend.tf
+#
+# 4. Initialize Terraform:
+#    terraform init -migrate-state  # If migrating from local state
+#    # or
+#    terraform init  # If starting fresh
+#
+# ==============================================================================
+# BACKEND CONFIGURATION
+# ==============================================================================
 
 terraform {
   backend "gcs" {
-    bucket = "REPLACE_WITH_BUCKET_NAME"  # Set by bootstrap output
+    # Replace __STATE_BUCKET_NAME__ with actual bucket name from bootstrap
+    # Example: cui-gitea-prod-gitea-tfstate-f5f2e413
+    bucket = "__STATE_BUCKET_NAME__"
+
+    # Prefix for state files (allows multiple environments in same bucket)
+    # Customize per environment:
+    #   Dev:     "dev/terraform/state"
+    #   Staging: "staging/terraform/state"
+    #   Prod:    "terraform/state"
     prefix = "terraform/state"
 
-    # Encryption is handled by bucket's default KMS key
-    # State locking is handled by GCS versioning
-    # No credentials needed - uses Application Default Credentials
+    # State locking is automatic with GCS versioning
+    # No credentials needed - uses Application Default Credentials (gcloud auth)
   }
 }
 
-# After creating this file with correct bucket name:
-# terraform init -migrate-state  # Migrate from local to GCS
-# or
-# terraform init -reconfigure     # Fresh initialization
+# ==============================================================================
+# MULTI-ENVIRONMENT USAGE
+# ==============================================================================
+#
+# To deploy multiple environments (dev, staging, prod):
+#
+# Method 1: Different prefixes (recommended)
+#   - Use same bucket, different prefixes
+#   - Example: prefix = "dev/terraform/state"
+#
+# Method 2: Terraform workspaces
+#   terraform workspace new dev
+#   terraform workspace select dev
+#   terraform apply -var-file=terraform.dev.tfvars
+#
+# ==============================================================================

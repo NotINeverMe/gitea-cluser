@@ -111,6 +111,29 @@ resource "google_compute_firewall" "deny_all_ingress" {
   }
 }
 
+# Allow HTTP traffic (port 80) for Let's Encrypt certificate validation
+resource "google_compute_firewall" "allow_http" {
+  name    = "${local.name_prefix}-allow-http"
+  network = google_compute_network.gitea_network.name
+  priority = 999
+
+  direction = "INGRESS"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["80"]
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["gitea-server"]
+
+  description = "Allow HTTP for Let's Encrypt ACME challenge and Caddy redirect"
+
+  log_config {
+    metadata = "INCLUDE_ALL_METADATA"
+  }
+}
+
 # Allow HTTPS traffic (port 443) - SC.L2-3.13.8: Transmission Confidentiality
 resource "google_compute_firewall" "allow_https" {
   name    = "${local.name_prefix}-allow-https"

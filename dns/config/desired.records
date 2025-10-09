@@ -1,0 +1,10 @@
+# name type address ttl [mx_pref]
+#
+# Examples below are placeholders. Replace addresses/targets to match your stack.
+# For MX records, specify preference as the 5th column.
+
+#gitea A 198.51.100.42 300
+#atlantis CNAME lb.example.net. 300
+#dashboard CNAME lb.example.net. 300
+#@ MX smtp.google.com. 1799 1
+
