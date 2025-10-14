@@ -1,36 +1,19 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- IaC in `terraform/`: `gitea-stack/` (stack), `modules/` (reusables), `policies/` (OPA/Sentinel).
-- Environment overlays in `terragrunt/`: `_envcommon/` (shared inputs), `environments/{dev,staging,prod}/` (overrides).
-- Ops assets: `atlantis/` (compose + policies), `monitoring/` (Prometheus/Grafana), `dashboard/` (Flask UI), `scripts/` (setup/backup/evidence).
-- Tests, fixtures, and replay data in `tests/`.
+Infrastructure-as-code lives in `terraform/` with `gitea-stack/` as the core stack, reusable building blocks in `modules/`, and guardrails under `policies/`. Environment overlays reside in `terragrunt/`: `_envcommon/` holds shared inputs, while `environments/{dev,staging,prod}/` apply overrides per tier. Operational assets are split across `atlantis/` (deployment automation), `monitoring/` (Prometheus/Grafana), `dashboard/` (Flask UI), and `scripts/` (setup, backups, evidence capture). Tests, fixtures, and replay data are consolidated in `tests/`.
 
 ## Build, Test, and Development Commands
-- `make setup` — bootstrap Atlantis prerequisites and secrets scaffolding.
-- `make start` — launch Atlantis via docker-compose.
-- `make validate` — run `terragrunt validate` across stacks.
-- `make fmt-check` — enforce `terraform fmt` in `terraform/`.
-- `make security-scan` — run Checkov, tfsec, Terrascan (reports in `/tmp`).
-- `make monitoring-deploy` — deploy the Prometheus/Grafana stack.
-- Dashboard: `docker-compose -f dashboard/docker-compose-dashboard.yml up --build` (E2E) or `python3 app.py` (iterate).
+Run `make setup` to scaffold Atlantis prerequisites and local secrets templates. `make start` spins up Atlantis via Docker Compose for iterative changes. Validate infrastructure with `make validate` (delegates to `terragrunt validate` across stacks) and enforce formatting through `make fmt-check`. Security posture is assessed with `make security-scan`, which aggregates Checkov, tfsec, and Terrascan outputs under `/tmp`. For observability work, `make monitoring-deploy` publishes the Prometheus/Grafana stack. The dashboard can be exercised end-to-end with `docker-compose -f dashboard/docker-compose-dashboard.yml up --build` or run locally via `python3 app.py`.
 
 ## Coding Style & Naming Conventions
-- HCL: two-space indent; `snake_case` variables; kebab-case resource names reflecting purpose (e.g., `runner_actions_cache`). Always run `terraform fmt`.
-- Shell: Bash with `set -euo pipefail`, functions indented 4 spaces, UPPERCASE constants.
-- Python (`dashboard/`): PEP 8, docstrings, modular blueprints—not monolithic routes.
+Terraform and Terragrunt files use two-space indents, `snake_case` variables, and kebab-case resource names describing intent (e.g., `runner_actions_cache`). Always finish with `terraform fmt`. Bash scripts begin with `set -euo pipefail`, keep functions indented 4 spaces, and reserve UPPERCASE for constants. Python under `dashboard/` follows PEP 8, applies docstrings, and prefers modular blueprints instead of monolithic route tables.
 
 ## Testing Guidelines
-- Before PRs: run `make validate`, `make security-scan`, `make fmt-check`; review `/tmp` JSON outputs.
-- When environment files change, capture `terragrunt run-all plan --terragrunt-non-interactive`.
-- For dashboard changes, rebuild/run, verify at `http://localhost:8000`, add screenshots; stash mocks in `tests/`.
+Before opening a PR, run `make validate`, `make fmt-check`, and `make security-scan`, reviewing generated JSON artifacts in `/tmp`. Any Terragrunt environment change requires evidence from `terragrunt run-all plan --terragrunt-non-interactive`. Dashboard updates should be validated manually at `http://localhost:8000`, with screenshots or mock data stored in `tests/`. Add or adjust fixtures when APIs evolve to keep replay runs deterministic.
 
 ## Commit & Pull Request Guidelines
-- Commits: capitalized subject with optional scope, e.g., `Infrastructure: tighten bucket IAM`, `Dashboard: add compliance tile`. Keep focused; include evidence only when essential.
-- PRs: describe intent, list affected environments/modules, link issues, attach plan snippets and security-scan deltas, include UI media, and flag manual follow-up.
+Commit subjects stay capitalized and scoped when useful, e.g., `Infrastructure: tighten bucket IAM`. Keep diffs focused and omit sensitive evidence from version control. Pull requests document intent, enumerate impacted environments or modules, link supporting issues, and attach plan snippets plus security-scan deltas. Include UI screenshots for dashboard work and call out any manual follow-up tasks.
 
 ## Security & Compliance Notes
-- Never commit secrets; use `atlantis/.env` templates and local `.tfvars`.
-- For compliance-impacting work: `make evidence-collect` then `make evidence-upload`.
-- Map services to CMMC controls via `CONTROL_MAPPING_MATRIX.md`; extend OPA guardrails in `atlantis/policies/` as the surface area grows.
-
+Treat secrets as ephemeral: use `atlantis/.env` templates and local `.tfvars`, never committing live credentials. For compliance-impacting work, capture artifacts with `make evidence-collect` and upload via `make evidence-upload`. Reference `CONTROL_MAPPING_MATRIX.md` when mapping services to CMMC controls, and extend guardrails in `atlantis/policies/` as coverage grows.
