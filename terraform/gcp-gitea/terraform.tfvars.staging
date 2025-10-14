@@ -1,0 +1,207 @@
+# Terraform Variables for Gitea GCP Staging Deployment
+# CMMC 2.0 Level 2 and NIST SP 800-171 Rev. 2 Compliant Configuration
+# DCG Gitea Staging Environment
+#
+# IMPORTANT: This file contains NO secrets - all credentials are in Secret Manager
+
+# ============================================================================
+# PROJECT & REGION CONFIGURATION
+# ============================================================================
+
+# GCP Project ID
+project_id = "dcg-gitea-stage"
+
+# GCP Region for resource deployment
+region = "us-central1"
+
+# GCP Zone for Compute Engine instance
+zone = "us-central1-a"
+
+# Environment name
+environment = "staging"
+
+# ============================================================================
+# BOOTSTRAP RESOURCES (From terraform/gcp-gitea/bootstrap)
+# ============================================================================
+
+# Terraform state bucket name (created by bootstrap)
+terraform_state_bucket = "dcg-gitea-stage-gitea-tfstate-e1fd2206"
+
+# KMS keyring name (created by bootstrap)
+kms_keyring_name = "dcg-gitea-stage-gitea-keyring"
+
+# KMS keyring location
+kms_keyring_location = "us"
+
+# ============================================================================
+# NETWORKING CONFIGURATION
+# ============================================================================
+
+# CIDR range for the Gitea subnet
+subnet_cidr = "10.0.1.0/24"
+
+# Enable Cloud NAT for outbound internet access
+enable_cloud_nat = true
+
+# CIDR ranges allowed for SSH access (IAP only)
+allowed_ssh_cidr_ranges = ["35.235.240.0/20"]
+
+# CIDR ranges allowed for HTTPS access (public for testing)
+allowed_https_cidr_ranges = ["0.0.0.0/0"]
+
+# CIDR ranges allowed for Git SSH access (disabled for now)
+allowed_git_ssh_cidr_ranges = []
+
+# ============================================================================
+# COMPUTE INSTANCE CONFIGURATION
+# ============================================================================
+
+# Machine type for Gitea instance (smaller for staging)
+machine_type = "e2-standard-4"
+
+# Minimum CPU platform
+cpu_platform = "Intel Cascade Lake"
+
+# Boot disk size in GB
+boot_disk_size = 100
+
+# Boot disk type
+boot_disk_type = "pd-ssd"
+
+# Data disk size in GB (smaller for staging)
+data_disk_size = 200
+
+# Data disk type
+data_disk_type = "pd-ssd"
+
+# ============================================================================
+# SECURITY CONFIGURATION - CMMC/NIST COMPLIANCE
+# ============================================================================
+
+# Shielded VM settings (REQUIRED for CMMC compliance)
+enable_secure_boot          = true
+enable_vtpm                 = true
+enable_integrity_monitoring = true
+
+# Enable OS Login for centralized SSH key management
+enable_os_login = true
+
+# Enable Identity-Aware Proxy for secure SSH access
+enable_iap = true
+
+# Enable Cloud KMS for encryption at rest
+enable_kms = true
+
+# Enable Secret Manager for credential storage
+enable_secret_manager = true
+
+# Enable Cloud Armor WAF protection
+enable_cloud_armor = true
+
+# Enable VPC Service Controls (requires organization setup)
+enable_vpc_sc = false
+
+# Enable all Shielded VM features
+enable_shielded_vm = true
+
+# ============================================================================
+# GITEA CONFIGURATION
+# ============================================================================
+
+# Domain name for Gitea (staging domain)
+# TODO: Configure DNS after deployment
+gitea_domain = "git-stage.dcg.cui-secure.us"
+
+# Gitea admin username
+gitea_admin_username = "admin"
+
+# Gitea admin password (auto-generated and stored in Secret Manager)
+gitea_admin_password = null
+
+# Gitea admin email address
+gitea_admin_email = "nmartin@dcg.cui-secure.us"
+
+# PostgreSQL password (auto-generated and stored in Secret Manager)
+postgres_password = null
+
+# Disable public user registration
+gitea_disable_registration = true
+
+# Require sign-in to view repositories
+gitea_require_signin_view = false
+
+# ============================================================================
+# STORAGE CONFIGURATION - RETENTION POLICIES
+# ============================================================================
+
+# Evidence retention in days (7 years for CMMC)
+evidence_retention_days = 2555
+
+# Backup retention in days (shorter for staging)
+backup_retention_days = 7
+
+# Logs retention in days
+logs_retention_days = 30
+
+# Enable versioning on GCS buckets
+enable_bucket_versioning = true
+
+# ============================================================================
+# MONITORING & ALERTING - SI.L2-3.14.1 COMPLIANCE
+# ============================================================================
+
+# Enable Cloud Monitoring dashboards and alerts
+enable_monitoring = true
+
+# Email address for alert notifications
+alert_email = "nmartin@dcg.cui-secure.us"
+
+# Enable uptime checks for Gitea
+enable_uptime_checks = true
+
+# ============================================================================
+# BACKUP & DISASTER RECOVERY - CP.L2-3.11.1 COMPLIANCE
+# ============================================================================
+
+# Enable automated daily backups
+enable_automated_backups = true
+
+# Cron schedule for automated backups (2 AM UTC daily)
+backup_schedule = "0 2 * * *"
+
+# Enable cross-region backup replication for DR (disabled for staging)
+enable_cross_region_backup = false
+
+# Secondary region for backup replication
+backup_region = "us-east1"
+
+# ============================================================================
+# LABELS & TAGGING
+# ============================================================================
+
+# Additional labels for all resources
+additional_labels = {
+  "department"          = "engineering"
+  "cost-center"         = "it-infrastructure"
+  "data-classification" = "test-data"
+  "compliance"          = "cmmc-level-2"
+  "owner"               = "platform-team"
+  "project-code"        = "git-stage-001"
+}
+
+# ============================================================================
+# ADVANCED CONFIGURATION
+# ============================================================================
+
+# Configure Docker to use Google Container Registry
+enable_docker_gcr = false
+
+# Custom startup script to append
+custom_startup_script = ""
+
+# Additional instance metadata
+metadata = {
+  "enable-guest-attributes" = "TRUE"
+  "enable-osconfig"         = "TRUE"
+  "osconfig-log-level"      = "info"
+}

@@ -4,11 +4,12 @@
 1. [Executive Summary](#executive-summary)
 2. [RTO/RPO Objectives](#rtorpo-objectives)
 3. [Backup Strategy](#backup-strategy)
-4. [Failover Procedures](#failover-procedures)
-5. [Testing Schedule](#testing-schedule)
-6. [Recovery Validation](#recovery-validation)
-7. [Post-Recovery Checklist](#post-recovery-checklist)
-8. [Appendices](#appendices)
+4. [Safety Validation Before Recovery](#safety-validation-before-recovery)
+5. [Failover Procedures](#failover-procedures)
+6. [Testing Schedule](#testing-schedule)
+7. [Recovery Validation](#recovery-validation)
+8. [Post-Recovery Checklist](#post-recovery-checklist)
+9. [Appendices](#appendices)
 
 ## Executive Summary
 
@@ -212,6 +213,53 @@ main() {
 main "$@"
 ```
 
+## Safety Validation Before Recovery
+
+**CRITICAL:** Before executing any recovery procedures, validate your environment to ensure you're restoring to the CORRECT project.
+
+### Pre-Recovery Checklist
+
+- [ ] Verify target project: `gcloud config get-value project`
+- [ ] Run project validation: `make validate-project`
+- [ ] Check environment configuration: `make show-environment`
+- [ ] Confirm terraform variable file explicitly: `-var-file=terraform.tfvars.{environment}`
+- [ ] Review [SAFE_OPERATIONS_GUIDE.md](SAFE_OPERATIONS_GUIDE.md) Section 4 (Emergency Procedures)
+
+### Validation Commands
+
+```bash
+# Verify you're in the correct project
+gcloud config get-value project
+
+# Validate terraform context
+./scripts/terraform-project-validator.sh \
+  --operation=plan \
+  --project=TARGET_PROJECT_ID \
+  --terraform-dir=terraform/gcp-gitea
+
+# Show current environment configuration
+make show-environment
+```
+
+**Why This Matters:** The dcg-gitea-stage incident (2025-10-13) occurred because terraform.tfvars auto-loaded with the wrong project. During disaster recovery, stress levels are high and mistakes are more likely. These validation steps prevent recovering to the wrong environment.
+
+### State Backup Importance
+
+**CRITICAL:** Always verify terraform state backups are current before any recovery operation.
+
+```bash
+# Check latest state backup
+gsutil ls -l gs://YOUR_TERRAFORM_STATE_BUCKET/backups/ | tail -5
+
+# Verify state integrity
+terraform state pull > /tmp/current-state.json
+cat /tmp/current-state.json | jq '.version' # Should show state version
+```
+
+**Lesson from dcg-gitea-stage incident:** The incident demonstrated how quickly infrastructure can be destroyed without proper validation. State backups are your last line of defense when recovering from accidental destruction. Always verify they exist and are recent before proceeding with recovery.
+
+---
+
 ## Failover Procedures
 
 ### Scenario 1: Complete Instance Failure
@@ -224,6 +272,21 @@ set -euo pipefail
 
 echo "=== DISASTER RECOVERY: Instance Failure ==="
 echo "Time: $(date)"
+
+# 0. CRITICAL: Validate environment first
+echo "[0] SAFETY CHECK: Validating target environment..."
+CURRENT_PROJECT=$(gcloud config get-value project)
+EXPECTED_PROJECT="${PROJECT_ID:-prod-project-id}"
+
+if [ "$CURRENT_PROJECT" != "$EXPECTED_PROJECT" ]; then
+    echo "ERROR: Project mismatch!"
+    echo "  Current:  $CURRENT_PROJECT"
+    echo "  Expected: $EXPECTED_PROJECT"
+    echo "Review: docs/SAFE_OPERATIONS_GUIDE.md Section 4"
+    exit 1
+fi
+
+echo "✓ Environment validated: $CURRENT_PROJECT"
 
 # 1. Verify failure
 echo "[1] Verifying instance failure..."
@@ -282,6 +345,21 @@ set -euo pipefail
 echo "=== DISASTER RECOVERY: Data Corruption ==="
 echo "Time: $(date)"
 
+# 0. CRITICAL: Validate environment first
+echo "[0] SAFETY CHECK: Validating target environment..."
+CURRENT_PROJECT=$(gcloud config get-value project)
+EXPECTED_PROJECT="${PROJECT_ID:-prod-project-id}"
+
+if [ "$CURRENT_PROJECT" != "$EXPECTED_PROJECT" ]; then
+    echo "ERROR: Project mismatch!"
+    echo "  Current:  $CURRENT_PROJECT"
+    echo "  Expected: $EXPECTED_PROJECT"
+    echo "Review: docs/SAFE_OPERATIONS_GUIDE.md Section 4"
+    exit 1
+fi
+
+echo "✓ Environment validated: $CURRENT_PROJECT"
+
 # 1. Isolate corrupted instance
 echo "[1] Isolating corrupted instance..."
 gcloud compute instances stop gitea-prod-server --zone=us-central1-a
@@ -339,6 +417,21 @@ echo "=== DISASTER RECOVERY: Regional Failover ==="
 echo "Time: $(date)"
 echo "Failing over from us-central1 to us-east1"
 
+# 0. CRITICAL: Validate environment first
+echo "[0] SAFETY CHECK: Validating target environment..."
+CURRENT_PROJECT=$(gcloud config get-value project)
+EXPECTED_PROJECT="${PROJECT_ID:-prod-project-id}"
+
+if [ "$CURRENT_PROJECT" != "$EXPECTED_PROJECT" ]; then
+    echo "ERROR: Project mismatch!"
+    echo "  Current:  $CURRENT_PROJECT"
+    echo "  Expected: $EXPECTED_PROJECT"
+    echo "Review: docs/SAFE_OPERATIONS_GUIDE.md Section 4"
+    exit 1
+fi
+
+echo "✓ Environment validated: $CURRENT_PROJECT"
+
 # 1. Verify regional outage
 echo "[1] Verifying regional outage..."
 if gcloud compute regions describe us-central1 --format="value(status)" 2>/dev/null | grep -q "UP"; then
@@ -351,7 +444,12 @@ fi
 echo "[2] Deploying infrastructure in DR region..."
 cd terraform/gcp-gitea-dr
 terraform init
-terraform apply -var="region=us-east1" -var="zone=us-east1-b" -auto-approve
+# CRITICAL: Explicitly specify var-file to prevent auto-loading wrong environment
+terraform apply \
+  -var-file="terraform.tfvars.prod" \
+  -var="region=us-east1" \
+  -var="zone=us-east1-b" \
+  -auto-approve
 
 # 3. Restore from DR backup
 echo "[3] Restoring from DR backup..."
@@ -405,6 +503,21 @@ echo "=== DISASTER RECOVERY: Security Breach ==="
 echo "Time: $(date)"
 echo "SECURITY INCIDENT - Executing containment and recovery"
 
+# 0. CRITICAL: Validate environment first
+echo "[0] SAFETY CHECK: Validating target environment..."
+CURRENT_PROJECT=$(gcloud config get-value project)
+EXPECTED_PROJECT="${PROJECT_ID:-prod-project-id}"
+
+if [ "$CURRENT_PROJECT" != "$EXPECTED_PROJECT" ]; then
+    echo "ERROR: Project mismatch!"
+    echo "  Current:  $CURRENT_PROJECT"
+    echo "  Expected: $EXPECTED_PROJECT"
+    echo "Review: docs/SAFE_OPERATIONS_GUIDE.md Section 4"
+    exit 1
+fi
+
+echo "✓ Environment validated: $CURRENT_PROJECT"
+
 # 1. Isolate compromised systems
 echo "[1] Isolating compromised systems..."
 gcloud compute firewall-rules create emergency-lockdown \
@@ -425,7 +538,11 @@ gcloud compute disks snapshot gitea-prod-server \
 echo "[3] Deploying clean infrastructure..."
 cd terraform/gcp-gitea-clean
 terraform init
-terraform apply -var="suffix=secure" -auto-approve
+# CRITICAL: Explicitly specify var-file to prevent auto-loading wrong environment
+terraform apply \
+  -var-file="terraform.tfvars.prod" \
+  -var="suffix=secure" \
+  -auto-approve
 
 # 4. Restore from pre-breach backup
 echo "[4] Identifying pre-breach backup..."
@@ -494,6 +611,10 @@ echo "Review audit logs for breach analysis"
 
 ### Test Procedures
 
+**IMPORTANT:** Always test with non-production environments first. Use `./scripts/environment-selector.sh` to safely switch environments. Never run DR tests against production systems unless performing a scheduled full exercise.
+
+**Safety First:** Review the [Safety Validation Before Recovery](#safety-validation-before-recovery) section before executing any test procedures.
+
 #### Weekly Restore Test
 
 ```bash
@@ -505,6 +626,15 @@ set -euo pipefail
 echo "=== Weekly DR Test ==="
 echo "Date: $(date)"
 echo "Test Type: Restore Verification"
+
+# CRITICAL: Validate environment before proceeding
+echo "[Pre-flight] Validating test environment..."
+CURRENT_PROJECT=$(gcloud config get-value project)
+if [ "$CURRENT_PROJECT" != "test-project-id" ]; then
+    echo "ERROR: Wrong project. Expected test-project-id, got $CURRENT_PROJECT"
+    echo "Use: ./scripts/environment-selector.sh to switch environments safely"
+    exit 1
+fi
 
 # Test environment variables
 TEST_ENV="staging"
@@ -572,12 +702,16 @@ echo "=== Test Complete ==="
 ```markdown
 # Quarterly DR Exercise Runbook
 
+**CRITICAL SAFETY NOTE:** Before starting this exercise, complete all steps in the [Safety Validation Before Recovery](#safety-validation-before-recovery) section. The dcg-gitea-stage incident (2025-10-13) demonstrated the importance of environment validation.
+
 ## Pre-Exercise (T-1 Week)
 - [ ] Schedule maintenance window
 - [ ] Notify all stakeholders
 - [ ] Review and update DR procedures
 - [ ] Prepare test scenarios
 - [ ] Configure monitoring dashboard
+- [ ] Verify terraform state backups are current
+- [ ] Review [SAFE_OPERATIONS_GUIDE.md](SAFE_OPERATIONS_GUIDE.md)
 
 ## Exercise Day
 
@@ -771,7 +905,15 @@ SELECT * FROM consistency_checks WHERE issue_count > 0;
 
 ## Post-Recovery Checklist
 
+**Important:** Use this checklist after completing any recovery procedure. Document all findings for compliance and continuous improvement.
+
 ### Immediate Actions (First Hour)
+
+- [ ] **Environment Validation**
+  - [ ] Verify recovered to correct project/environment
+  - [ ] Confirm terraform state matches infrastructure
+  - [ ] Check no unintended resources were created/destroyed
+  - [ ] Validate backup integrity was maintained
 
 - [ ] **Service Verification**
   - [ ] Web interface accessible
@@ -836,12 +978,16 @@ SELECT * FROM consistency_checks WHERE issue_count > 0;
 ```markdown
 # Disaster Recovery Incident Report
 
+**Note:** This template was enhanced following the dcg-gitea-stage incident (2025-10-13) to emphasize environment validation and state backup verification.
+
 ## Incident Overview
 - **Incident ID**: DR-YYYYMMDD-###
 - **Date/Time**: YYYY-MM-DD HH:MM UTC
 - **Duration**: X hours Y minutes
 - **Severity**: Critical/High/Medium
-- **Type**: [Instance Failure/Data Corruption/Regional Outage/Security Breach]
+- **Type**: [Instance Failure/Data Corruption/Regional Outage/Security Breach/Accidental Destruction]
+- **Environment Validation Performed**: Yes/No
+- **State Backup Available**: Yes/No
 
 ## Impact Assessment
 - **Services Affected**:
@@ -962,8 +1108,12 @@ Repository: https://git.example.com/infrastructure/dr-scripts
 
 ---
 
-*Document Version: 1.0*
-*Last Updated: 2024*
+*Document Version: 1.1*
+*Last Updated: 2025-10-13*
 *Next Review: Quarterly*
 *Classification: Confidential*
 *Compliance: CMMC Level 2 / NIST SP 800-171 / ISO 27001*
+
+**Change Log:**
+- v1.1 (2025-10-13): Added Safety Validation Before Recovery section, explicit -var-file parameters, incident references (dcg-gitea-stage), and enhanced pre-recovery validation steps
+- v1.0 (2024): Initial document

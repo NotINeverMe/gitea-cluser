@@ -1,18 +1,51 @@
 # GCP Gitea Operations Runbook
 
 ## Table of Contents
-1. [Health Monitoring Procedures](#health-monitoring-procedures)
-2. [Backup and Restore Procedures](#backup-and-restore-procedures)
-3. [Scaling Guidelines](#scaling-guidelines)
-4. [Update Procedures](#update-procedures)
-5. [Incident Response](#incident-response)
-6. [Log Analysis](#log-analysis)
-7. [Performance Tuning](#performance-tuning)
-8. [Standard Operating Procedures](#standard-operating-procedures)
+1. [Safety First - Before You Begin](#safety-first---before-you-begin)
+2. [Health Monitoring Procedures](#health-monitoring-procedures)
+3. [Backup and Restore Procedures](#backup-and-restore-procedures)
+4. [Scaling Guidelines](#scaling-guidelines)
+5. [Update Procedures](#update-procedures)
+6. [Incident Response](#incident-response)
+7. [Log Analysis](#log-analysis)
+8. [Performance Tuning](#performance-tuning)
+9. [Standard Operating Procedures](#standard-operating-procedures)
+
+## Safety First - Before You Begin
+
+**⚠️ MANDATORY SAFETY CHECKLIST ⚠️**
+
+Before performing ANY infrastructure operations, complete this checklist:
+
+- [ ] Read [SAFE_OPERATIONS_GUIDE.md](SAFE_OPERATIONS_GUIDE.md) if you haven't already
+- [ ] Verify current environment: `make show-environment`
+- [ ] Verify GCP project context: `gcloud config get-value project`
+- [ ] Ensure project matches your intent (dev/staging/prod)
+- [ ] Use explicit `-var-file` parameter (NEVER rely on auto-loaded terraform.tfvars)
+- [ ] Review [ENVIRONMENT_MANAGEMENT.md](ENVIRONMENT_MANAGEMENT.md) for environment switching
+
+**Recent Incident:** On 2025-10-13, the dcg-gitea-stage environment was accidentally destroyed instead of cui-gitea-prod due to terraform.tfvars auto-loading with the wrong project_id. All safety controls in this runbook are designed to prevent similar incidents.
+
+**Related Documentation:**
+- [SAFE_OPERATIONS_GUIDE.md](SAFE_OPERATIONS_GUIDE.md) - Mandatory safety procedures
+- [ENVIRONMENT_MANAGEMENT.md](ENVIRONMENT_MANAGEMENT.md) - Environment isolation strategy
+- [SAFETY_TRAINING.md](SAFETY_TRAINING.md) - Team training and incident case study
+
+---
 
 ## Health Monitoring Procedures
 
 ### Daily Health Checks
+
+**⚠️ Safety Check:** Before running any health checks, verify your environment context:
+```bash
+# Verify project and environment
+make show-environment
+make validate-project
+
+# Confirm GCP project matches your intent
+gcloud config get-value project
+```
 
 #### Automated Monitoring
 ```bash
@@ -214,6 +247,18 @@ conditions:
 
 ## Backup and Restore Procedures
 
+**⚠️ Safety Check:** Backup and restore operations must target the correct environment:
+```bash
+# ALWAYS verify environment before backup/restore operations
+make show-environment
+make validate-project
+
+# Use environment selector if needed
+source scripts/environment-selector.sh
+```
+
+**Critical:** Restoring to the wrong environment can cause data loss. Double-check project_id before proceeding.
+
 ### Automated Daily Backups
 
 #### Setup Cron Job
@@ -352,9 +397,22 @@ echo "Verification complete"
 
 ## Scaling Guidelines
 
+**⚠️ Safety Check:** Before scaling operations:
+```bash
+# Verify you're targeting the correct environment
+make show-environment
+gcloud config get-value project
+
+# Use environment selector if switching environments
+source scripts/environment-selector.sh
+```
+
 ### Vertical Scaling (Resize Instance)
 
 ```bash
+# ALWAYS verify project and environment first
+make validate-project
+
 # Stop instance
 gcloud compute instances stop gitea-$ENVIRONMENT-server --zone=$ZONE
 
@@ -457,6 +515,19 @@ k6 run gitea-load-test.js
 
 ## Update Procedures
 
+**⚠️ Safety Check:** Before ANY update operations:
+```bash
+# Verify environment and project
+make show-environment
+make validate-project
+gcloud config get-value project
+
+# Use environment selector if switching
+source scripts/environment-selector.sh
+```
+
+**Critical:** Updates to production must follow change control procedures. See [SAFE_OPERATIONS_GUIDE.md](SAFE_OPERATIONS_GUIDE.md).
+
 ### Gitea Version Update
 
 ```bash
@@ -464,6 +535,10 @@ k6 run gitea-load-test.js
 # update-gitea.sh
 
 set -e
+
+# MANDATORY: Verify environment before proceeding
+echo "Verifying environment..."
+gcloud config get-value project || { echo "No GCP project set!"; exit 1; }
 
 ENVIRONMENT=$1
 NEW_VERSION=$2
@@ -552,6 +627,17 @@ dpkg -l | grep [package-name]
 
 ## Incident Response
 
+**⚠️ Safety Check:** Even during incidents, verify your environment context:
+```bash
+# During high-pressure incidents, it's CRITICAL to verify environment
+make show-environment
+make validate-project
+
+# Panic changes to the wrong environment make incidents worse!
+```
+
+**Important:** See [SAFE_OPERATIONS_GUIDE.md](SAFE_OPERATIONS_GUIDE.md) Section 5 for incident response safety procedures.
+
 ### Incident Classification
 
 | Severity | Description | Response Time | Examples |
@@ -570,6 +656,21 @@ dpkg -l | grep [package-name]
 
 echo "=== P1 INCIDENT RESPONSE ==="
 echo "Time: $(date)"
+
+# 0. MANDATORY SAFETY CHECK
+echo "[0] Verifying environment (CRITICAL - even during P1)..."
+CURRENT_PROJECT=$(gcloud config get-value project 2>/dev/null)
+if [ -z "$CURRENT_PROJECT" ]; then
+    echo "ERROR: No GCP project set. Aborting to prevent wrong-environment changes."
+    exit 1
+fi
+echo "Current project: $CURRENT_PROJECT"
+echo "Expected project: $PROJECT_ID"
+if [ "$CURRENT_PROJECT" != "$PROJECT_ID" ]; then
+    echo "WARNING: Project mismatch! Confirm before proceeding."
+    read -p "Continue with $CURRENT_PROJECT? (yes/no): " CONFIRM
+    [ "$CONFIRM" != "yes" ] && exit 1
+fi
 
 # 1. Initial Assessment
 echo "[1] Checking instance status..."
@@ -918,6 +1019,8 @@ EOF
 
 ## Standard Operating Procedures
 
+**⚠️ Safety Notice:** All operations must follow the safety procedures in [SAFE_OPERATIONS_GUIDE.md](SAFE_OPERATIONS_GUIDE.md).
+
 ### Daily Operations Checklist
 
 ```markdown
@@ -925,6 +1028,12 @@ EOF
 
 Date: _____________
 Operator: _____________
+
+### Pre-Shift Safety Verification
+- [ ] Run `make show-environment` and confirm correct environment
+- [ ] Run `make validate-project` to verify GCP project
+- [ ] Review [SAFE_OPERATIONS_GUIDE.md](SAFE_OPERATIONS_GUIDE.md) if needed
+- [ ] Confirm environment selector script is available: `scripts/environment-selector.sh`
 
 ### Morning Checks (9:00 AM)
 - [ ] Review overnight alerts
@@ -956,6 +1065,18 @@ Operator: _____________
 
 echo "=== Weekly Maintenance Starting ==="
 echo "Date: $(date)"
+
+# 0. MANDATORY SAFETY CHECK
+echo "[0] Verifying environment..."
+CURRENT_PROJECT=$(gcloud config get-value project 2>/dev/null)
+if [ -z "$CURRENT_PROJECT" ]; then
+    echo "ERROR: No GCP project set. Run 'source scripts/environment-selector.sh'"
+    exit 1
+fi
+echo "Operating on project: $CURRENT_PROJECT"
+echo "Operating on environment: $ENVIRONMENT"
+read -p "Confirm this is correct (yes/no): " CONFIRM
+[ "$CONFIRM" != "yes" ] && exit 1
 
 # 1. Security updates
 echo "[1] Checking security updates..."
@@ -1087,6 +1208,26 @@ graph TD
 
 ---
 
-*Last Updated: 2024*
-*Version: 1.0*
+## Document Revision History
+
+| Version | Date | Changes | Updated By |
+|---------|------|---------|------------|
+| 1.1 | 2025-10-13 | Added safety procedures and environment verification checks throughout | System |
+| 1.0 | 2024 | Initial version | System |
+
+## Mandatory Safety Training
+
+All operators MUST complete safety training before using this runbook:
+1. Read [SAFE_OPERATIONS_GUIDE.md](SAFE_OPERATIONS_GUIDE.md) in full
+2. Review the incident case study in [SAFETY_TRAINING.md](SAFETY_TRAINING.md)
+3. Understand environment management in [ENVIRONMENT_MANAGEMENT.md](ENVIRONMENT_MANAGEMENT.md)
+4. Practice using `scripts/environment-selector.sh` in non-production environments
+5. Always use `make show-environment` and `make validate-project` before operations
+
+**Remember:** Taking 30 seconds to verify your environment can prevent hours of incident response and potential data loss.
+
+---
+
+*Last Updated: 2025-10-13*
+*Version: 1.1*
 *Compliance: CMMC Level 2 / NIST SP 800-171*

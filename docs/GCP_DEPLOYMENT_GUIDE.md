@@ -1,15 +1,41 @@
 # GCP Gitea Deployment Guide
 
 ## Table of Contents
-1. [Architecture Overview](#architecture-overview)
-2. [Prerequisites](#prerequisites)
-3. [Pre-Deployment Checklist](#pre-deployment-checklist)
-4. [Step-by-Step Deployment](#step-by-step-deployment)
-5. [DNS and SSL Configuration](#dns-and-ssl-configuration)
-6. [Post-Deployment Verification](#post-deployment-verification)
-7. [Troubleshooting Guide](#troubleshooting-guide)
-8. [Security Hardening](#security-hardening)
-9. [Cost Optimization](#cost-optimization)
+1. [Pre-Deployment Safety Check](#pre-deployment-safety-check)
+2. [Architecture Overview](#architecture-overview)
+3. [Prerequisites](#prerequisites)
+4. [Pre-Deployment Checklist](#pre-deployment-checklist)
+5. [Step-by-Step Deployment](#step-by-step-deployment)
+6. [DNS and SSL Configuration](#dns-and-ssl-configuration)
+7. [Post-Deployment Verification](#post-deployment-verification)
+8. [Troubleshooting Guide](#troubleshooting-guide)
+9. [Security Hardening](#security-hardening)
+10. [Cost Optimization](#cost-optimization)
+
+## Pre-Deployment Safety Check
+
+**⚠️ READ THIS FIRST ⚠️**
+
+Before deploying infrastructure, familiarize yourself with our safety procedures to prevent configuration errors and wrong-project deployments.
+
+### Required Reading (First-Time Deployers)
+- [SAFE_OPERATIONS_GUIDE.md](SAFE_OPERATIONS_GUIDE.md) - Mandatory safety procedures
+- [ENVIRONMENT_MANAGEMENT.md](ENVIRONMENT_MANAGEMENT.md) - Environment isolation strategy
+- [SAFETY_TRAINING.md](SAFETY_TRAINING.md) - Training and incident case study
+
+### Pre-Deployment Checklist
+- [ ] Verify you're in the correct GCP project: `gcloud config get-value project`
+- [ ] Select environment: `./scripts/environment-selector.sh`
+- [ ] Verify environment configuration: `make show-environment`
+- [ ] Prepare environment-specific variable file: `terraform.tfvars.{environment}`
+- [ ] NEVER use `terraform.tfvars` (without suffix) - it auto-loads and is dangerous
+
+### Critical Incident Awareness
+On **2025-10-13**, an auto-loaded `terraform.tfvars` file containing `project_id = "dcg-gitea-stage"` caused the destruction of the staging environment instead of production. This incident resulted in 6 hours of downtime and a complete infrastructure restoration.
+
+**Prevention:** All terraform commands in this guide use explicit `-var-file` parameters. Never skip this parameter or rely on auto-loaded files.
+
+---
 
 ## Architecture Overview
 
@@ -153,6 +179,16 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 
 ## Pre-Deployment Checklist
 
+### Safety Requirements (MANDATORY)
+
+- [ ] **Safety Documentation** - Read all three safety guides linked above
+- [ ] **GCP Project Verification** - Confirmed correct project with `gcloud config get-value project`
+- [ ] **Environment Selection** - Used `./scripts/environment-selector.sh` OR manually verified
+- [ ] **Variable File Naming** - Using `terraform.tfvars.{environment}` format (NEVER plain `terraform.tfvars`)
+- [ ] **No Auto-Load Files** - Verified NO `terraform.tfvars` or `*.auto.tfvars` files exist
+- [ ] **State File Location** - Confirmed terraform state location matches environment
+- [ ] **Make Validation** - Ran `make show-environment` and confirmed output
+
 ### Configuration Requirements
 
 - [ ] **Project ID** - Valid GCP project with billing enabled
@@ -192,28 +228,65 @@ cd gitea-infrastructure
 ### 2. Configure Environment
 
 ```bash
-# Set environment variables
+# Use environment selector for safe project/environment selection
+./scripts/environment-selector.sh
+
+# This will:
+# - Prompt for environment (dev/staging/prod)
+# - Verify GCP project selection
+# - Set environment variables safely
+# - Display confirmation before proceeding
+
+# Manual alternative (use with caution):
 export PROJECT_ID="your-project-id"
 export DOMAIN="git.example.com"
 export ADMIN_EMAIL="admin@example.com"
 export ENVIRONMENT="prod"  # or dev, staging
+
+# Verify configuration
+make show-environment
 ```
 
-### 3. Run Deployment Script
+**Critical:** Always verify your GCP project before proceeding:
+```bash
+gcloud config get-value project
+# Expected: dcg-gitea-prod (for production)
+# Expected: dcg-gitea-stage (for staging)
+# Expected: dcg-gitea-dev (for development)
+```
+
+### 3. Prepare Environment-Specific Variables
+
+```bash
+# Create environment-specific tfvars file
+# NEVER use terraform.tfvars (auto-loaded, dangerous)
+cat > terraform.tfvars.${ENVIRONMENT} << EOF
+project_id    = "${PROJECT_ID}"
+environment   = "${ENVIRONMENT}"
+domain        = "${DOMAIN}"
+admin_email   = "${ADMIN_EMAIL}"
+EOF
+
+# Verify the file contents
+cat terraform.tfvars.${ENVIRONMENT}
+```
+
+### 4. Run Deployment Script
 
 ```bash
 # Make script executable
 chmod +x scripts/gcp-deploy.sh
 
-# Run deployment
+# Run deployment with explicit variable file
 ./scripts/gcp-deploy.sh \
   -p $PROJECT_ID \
   -d $DOMAIN \
   -a $ADMIN_EMAIL \
-  -e $ENVIRONMENT
+  -e $ENVIRONMENT \
+  --var-file="terraform.tfvars.${ENVIRONMENT}"
 ```
 
-### 4. Monitor Deployment
+### 5. Monitor Deployment
 
 The deployment will:
 1. Enable required APIs
@@ -225,7 +298,7 @@ The deployment will:
 
 Expected duration: 15-20 minutes
 
-### 5. Deployment Output
+### 6. Deployment Output
 
 Upon successful deployment, you'll receive:
 - External IP address
@@ -234,13 +307,43 @@ Upon successful deployment, you'll receive:
 - Monitoring dashboard URL
 - Evidence file location
 
+### 7. Post-Deployment Validation
+
+**Critical:** Always validate deployment in the correct project:
+
+```bash
+# Validate project configuration
+make validate-project
+
+# This checks:
+# - GCP project matches expected environment
+# - Terraform state is in correct location
+# - Resources exist in expected project
+# - No cross-project contamination
+
+# Manual validation
+gcloud config get-value project
+terraform output -state=terraform.tfstate.d/${ENVIRONMENT}/terraform.tfstate
+
+# Verify resources are in correct project
+gcloud compute instances list --project=${PROJECT_ID} | grep gitea-${ENVIRONMENT}
+```
+
 ## DNS and SSL Configuration
 
 ### Configure DNS
 
 1. **Get External IP**:
 ```bash
-EXTERNAL_IP=$(cd terraform/gcp-gitea && terraform output -raw instance_external_ip)
+# Get external IP with explicit state file
+cd terraform/gcp-gitea
+EXTERNAL_IP=$(terraform output -raw instance_external_ip \
+  -state=terraform.tfstate.d/${ENVIRONMENT}/terraform.tfstate)
+echo "External IP: $EXTERNAL_IP"
+
+# Alternative using var-file
+EXTERNAL_IP=$(terraform output -raw instance_external_ip \
+  -var-file="terraform.tfvars.${ENVIRONMENT}")
 echo "External IP: $EXTERNAL_IP"
 ```
 
@@ -401,6 +504,23 @@ git push origin main
 ```
 
 ## Troubleshooting Guide
+
+### Safety First: Verify Project Before Troubleshooting
+
+**⚠️ WARNING:** Before running any troubleshooting commands, verify you're in the correct project:
+
+```bash
+# Verify project
+gcloud config get-value project
+
+# Expected output should match your target environment:
+# - dcg-gitea-prod (production)
+# - dcg-gitea-stage (staging)
+# - dcg-gitea-dev (development)
+
+# If wrong project, use environment selector
+./scripts/environment-selector.sh
+```
 
 ### Common Issues and Solutions
 
@@ -651,24 +771,53 @@ gcloud billing budgets create \
 ### Maintenance Procedure
 
 ```bash
+# 0. SAFETY CHECK - Verify correct project and environment
+echo "=== MAINTENANCE SAFETY CHECK ==="
+echo "Current GCP Project: $(gcloud config get-value project)"
+echo "Target Environment: $ENVIRONMENT"
+echo "Expected Project: dcg-gitea-${ENVIRONMENT}"
+read -p "Does this match your intention? (yes/no): " confirm
+if [ "$confirm" != "yes" ]; then
+  echo "Aborting. Use ./scripts/environment-selector.sh to set correct project."
+  exit 1
+fi
+
 # 1. Announce maintenance
-# 2. Create backup
+# Post notification to team channels
+
+# 2. Validate project and create backup
+make validate-project
 ./scripts/gcp-backup.sh -p $PROJECT_ID -e $ENVIRONMENT
 
-# 3. Perform maintenance
-gcloud compute instances stop gitea-$ENVIRONMENT-server --zone=us-central1-a
+# 3. Perform maintenance (with explicit project flag)
+gcloud compute instances stop gitea-$ENVIRONMENT-server \
+  --zone=us-central1-a \
+  --project=${PROJECT_ID}
 # ... perform tasks ...
-gcloud compute instances start gitea-$ENVIRONMENT-server --zone=us-central1-a
+gcloud compute instances start gitea-$ENVIRONMENT-server \
+  --zone=us-central1-a \
+  --project=${PROJECT_ID}
 
 # 4. Verify services
 ./scripts/health-check.sh
 
-# 5. Notify completion
+# 5. Post-maintenance validation
+make validate-project
+
+# 6. Notify completion
 ```
 
 ## Support and Resources
 
 ### Documentation
+
+**Safety & Operations (READ FIRST):**
+- [SAFE_OPERATIONS_GUIDE.md](SAFE_OPERATIONS_GUIDE.md) - Mandatory safety procedures
+- [ENVIRONMENT_MANAGEMENT.md](ENVIRONMENT_MANAGEMENT.md) - Environment isolation strategy
+- [SAFETY_TRAINING.md](SAFETY_TRAINING.md) - Training and incident case study
+- [RUNBOOK.md](RUNBOOK.md) - Operational procedures and troubleshooting
+
+**External Documentation:**
 - [Gitea Documentation](https://docs.gitea.io/)
 - [GCP Documentation](https://cloud.google.com/docs)
 - [Terraform Documentation](https://www.terraform.io/docs)
@@ -686,6 +835,21 @@ gcloud compute instances start gitea-$ENVIRONMENT-server --zone=us-central1-a
 
 ---
 
-*Last Updated: 2024*
-*Version: 1.0*
+## Safety Incident Reference
+
+**Critical Incident - 2025-10-13:** Auto-loaded `terraform.tfvars` file caused staging environment destruction during production deployment. 6 hours downtime, full infrastructure restoration required.
+
+**Key Lessons:**
+1. NEVER use auto-loaded variable files (`terraform.tfvars`, `*.auto.tfvars`)
+2. Always use explicit `-var-file=terraform.tfvars.{environment}` parameters
+3. Verify GCP project before EVERY terraform/gcloud command
+4. Use `./scripts/environment-selector.sh` for safe environment selection
+5. Run `make validate-project` before and after deployments
+
+For detailed analysis, see [SAFETY_TRAINING.md](SAFETY_TRAINING.md)
+
+---
+
+*Last Updated: 2025-10-13*
+*Version: 2.0 (Safety Enhanced)*
 *Compliance: CMMC Level 2 / NIST SP 800-171*

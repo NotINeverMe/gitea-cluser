@@ -1,8 +1,21 @@
 # Terraform Variables Example File for Gitea GCP Deployment
 # CMMC 2.0 Level 2 and NIST SP 800-171 Rev. 2 Compliant Configuration
 #
-# Copy this file to terraform.tfvars and customize for your environment
-# IMPORTANT: Never commit terraform.tfvars to version control
+# ⚠️  CRITICAL SAFETY WARNING ⚠️
+# DO NOT copy this file to "terraform.tfvars" - it will auto-load and caused the
+# dcg-gitea-stage incident on 2025-10-13 (wrong project destroyed).
+#
+# CORRECT: Copy to terraform.tfvars.{environment}
+#   - terraform.tfvars.dev
+#   - terraform.tfvars.staging
+#   - terraform.tfvars.prod
+#
+# Then use explicit -var-file parameter:
+#   terraform plan -var-file=terraform.tfvars.staging
+#   terraform apply -var-file=terraform.tfvars.prod
+#
+# See: docs/SAFE_OPERATIONS_GUIDE.md for detailed safety procedures
+# See: docs/ENVIRONMENT_MANAGEMENT.md for environment isolation strategy
 
 # ============================================================================
 # PROJECT & REGION CONFIGURATION

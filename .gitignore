@@ -2,13 +2,34 @@
 .env.gitea
 .env*.local
 
+# Environment-specific configuration (contains project IDs)
+.env
+.env.dev
+.env.staging
+.env.prod
+.env.local
+
+# Allow tracked environment configs under terraform/gcp-gitea
+!terraform/gcp-gitea/.env.dev
+!terraform/gcp-gitea/.env.staging
+!terraform/gcp-gitea/.env.prod
+!terraform/gcp-gitea/.env.example
+
 # Terraform
 terraform/.terraform/
 terraform/**/.terraform/
 terraform/*.tfstate
 terraform/*.tfstate.backup
 terraform/**/.terraform.lock.hcl
-terraform/**/terraform.tfvars
+
+# Terraform Variables - CRITICAL SAFETY CONFIGURATION
+# Block auto-loaded terraform.tfvars (caused dcg-gitea-stage incident on 2025-10-13)
+terraform/gcp-gitea/terraform.tfvars
+# Allow environment-specific variable files (safe - require explicit -var-file)
+!terraform/gcp-gitea/terraform.tfvars.dev
+!terraform/gcp-gitea/terraform.tfvars.staging
+!terraform/gcp-gitea/terraform.tfvars.prod
+!terraform/gcp-gitea/terraform.tfvars.example
 
 # Docker volumes and data
 data/

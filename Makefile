@@ -32,10 +32,27 @@ help: ## Show this help message
 	@echo "  $(YELLOW)PROJECT_ID$(NC)    GCP Project ID (current: $(PROJECT_ID))"
 	@echo "  $(YELLOW)ENVIRONMENT$(NC)   Target environment (current: $(ENVIRONMENT))"
 	@echo ""
+	@echo "Safety validation:"
+	@echo "  $(GREEN)validate-project$(NC)      Validate GCP project and terraform context"
+	@echo "  $(GREEN)validate-destroy$(NC)      Validate destroy plan (requires VAR_FILE=...)"
+	@echo "  $(GREEN)show-environment$(NC)      Display current environment configuration"
+	@echo "  $(GREEN)verify-project$(NC)        Verify GCP project matches Makefile"
+	@echo "  $(GREEN)destroy-with-validation$(NC) Safe destroy with multi-layer validation"
+	@echo "  $(GREEN)safe-destroy$(NC)          Legacy alias to destroy-with-validation"
+	@echo "  $(GREEN)switch-environment$(NC)    Switch environment (requires ENV=dev|staging|prod)"
+	@echo "  $(GREEN)switch-env$(NC)            Legacy alias for switch-environment"
+	@echo "  $(GREEN)audit-log$(NC)             Show recent environment operations"
+	@echo "  $(GREEN)audit-stats$(NC)           Show audit log statistics"
+	@echo "  $(GREEN)safety-check$(NC)          Run all safety validation checks"
+	@echo "  $(GREEN)pre-flight-check$(NC)      Complete pre-flight checklist"
+	@echo "  $(GREEN)emergency-rollback$(NC)    Emergency rollback procedures (interactive)"
+	@echo ""
 	@echo "Security shortcuts:"
 	@echo "  $(GREEN)security-suite$(NC)        Run full app+infra security suite (evidence)"
 	@echo "  $(GREEN)security-infra$(NC)        Run infra checks + pen tests"
 	@echo "  $(GREEN)security-dast$(NC)         Run ZAP + Nuclei + validation"
+	@echo ""
+	@echo "DNS shortcuts:"
 	@echo "  $(GREEN)dns-backup$(NC)            Backup Namecheap DNS (evidence)"
 	@echo "  $(GREEN)dns-plan$(NC)              Diff desired vs live DNS"
 	@echo "  $(GREEN)dns-apply-dry$(NC)         Dry-run Namecheap update"
@@ -155,6 +172,235 @@ fmt-fix: ## Fix Terraform formatting
 	@echo "$(YELLOW)Fixing Terraform formatting...$(NC)"
 	@terraform fmt -recursive terraform/
 	@echo "$(GREEN)Formatting fixed$(NC)"
+
+# ===== SAFETY VALIDATION TARGETS =====
+
+validate-project: ## Validate GCP project and terraform context
+	@echo "$(GREEN)Running project validation...$(NC)"
+	@VAR_FLAG=""; \
+	if [ -n "$(VAR_FILE)" ]; then \
+	  VAR_FLAG="--var-file=$(VAR_FILE)"; \
+	  echo "Using variable file: $(VAR_FILE)"; \
+	fi; \
+	./scripts/terraform-project-validator.sh \
+		--operation=plan \
+		--project=$(PROJECT_ID) \
+		--terraform-dir=terraform/gcp-gitea \
+		$$VAR_FLAG
+	@echo "$(GREEN)Project validation complete$(NC)"
+
+validate-destroy: ## Validate destroy plan with safety checks
+	@echo "$(GREEN)Running pre-destroy validation...$(NC)"
+	@test -n "$(VAR_FILE)" || (echo "$(RED)ERROR: VAR_FILE is required. Use: make validate-destroy VAR_FILE=terraform.tfvars.prod$(NC)" && exit 1)
+	@./scripts/pre-destroy-validator.sh \
+		--project=$(PROJECT_ID) \
+		--var-file=$(VAR_FILE) \
+		--terraform-dir=terraform/gcp-gitea
+	@echo "$(GREEN)Pre-destroy validation complete$(NC)"
+
+show-environment: ## Display current environment configuration
+	@echo "$(GREEN)Current Environment Configuration$(NC)"
+	@echo "=================================="
+	@echo "GCloud Active Project:   $$(gcloud config get-value project 2>/dev/null || echo 'NOT SET')"
+	@echo "Makefile PROJECT_ID:     $(PROJECT_ID)"
+	@echo "Makefile ENVIRONMENT:    $(ENVIRONMENT)"
+	@echo ""
+	@echo "Terraform State:"
+	@test -f terraform/gcp-gitea/terraform.tfstate && echo "  State file exists: YES" || echo "  State file exists: NO"
+	@test -f terraform/gcp-gitea/terraform.tfvars && echo "  terraform.tfvars: EXISTS (auto-loaded - DANGER)" || echo "  terraform.tfvars: Not found"
+	@test -f terraform/gcp-gitea/terraform.tfvars.$(ENVIRONMENT) && echo "  terraform.tfvars.$(ENVIRONMENT): EXISTS" || echo "  terraform.tfvars.$(ENVIRONMENT): Not found"
+	@echo ""
+	@echo "Safety Scripts:"
+	@test -x scripts/terraform-project-validator.sh && echo "  ✓ terraform-project-validator.sh" || echo "  ✗ terraform-project-validator.sh (missing or not executable)"
+	@test -x scripts/pre-destroy-validator.sh && echo "  ✓ pre-destroy-validator.sh" || echo "  ✗ pre-destroy-validator.sh (missing or not executable)"
+	@test -x scripts/gcp-destroy.sh && echo "  ✓ gcp-destroy.sh" || echo "  ✗ gcp-destroy.sh (missing or not executable)"
+	@echo ""
+	@test -f docs/SAFE_OPERATIONS_GUIDE.md && echo "Documentation: docs/SAFE_OPERATIONS_GUIDE.md" || echo "$(YELLOW)WARNING: docs/SAFE_OPERATIONS_GUIDE.md not found$(NC)"
+
+verify-project: ## Verify GCP project context matches Makefile
+	@echo "$(GREEN)Verifying project context...$(NC)"
+	@GCLOUD_PROJECT=$$(gcloud config get-value project 2>/dev/null); \
+	if [ -z "$$GCLOUD_PROJECT" ]; then \
+		echo "$(RED)ERROR: No active GCP project in gcloud config$(NC)"; \
+		echo "$(YELLOW)Run: gcloud config set project $(PROJECT_ID)$(NC)"; \
+		exit 1; \
+	elif [ "$$GCLOUD_PROJECT" != "$(PROJECT_ID)" ]; then \
+		echo "$(RED)ERROR: Project mismatch!$(NC)"; \
+		echo "  gcloud active project: $$GCLOUD_PROJECT"; \
+		echo "  Makefile PROJECT_ID:   $(PROJECT_ID)"; \
+		echo "$(YELLOW)Run: gcloud config set project $(PROJECT_ID)$(NC)"; \
+		exit 1; \
+	else \
+		echo "$(GREEN)✓ Project verified: $(PROJECT_ID)$(NC)"; \
+	fi
+
+destroy-with-validation: ## Safe destroy with validation (requires PROJECT_ID, ENVIRONMENT, VAR_FILE)
+	@echo "$(RED)╔══════════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(RED)║              SAFE INFRASTRUCTURE DESTRUCTION                     ║$(NC)"
+	@echo "$(RED)╚══════════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@test -n "$(PROJECT_ID)" || (echo "$(RED)ERROR: PROJECT_ID is required$(NC)" && exit 1)
+	@test -n "$(ENVIRONMENT)" || (echo "$(RED)ERROR: ENVIRONMENT is required$(NC)" && exit 1)
+	@test -n "$(VAR_FILE)" || (echo "$(RED)ERROR: VAR_FILE is required$(NC)" && exit 1)
+	@echo "Project:    $(PROJECT_ID)"
+	@echo "Environment: $(ENVIRONMENT)"
+	@echo "Var file:  $(VAR_FILE)"
+	@echo ""
+	@$(MAKE) verify-project PROJECT_ID=$(PROJECT_ID)
+	@EXPECTED_VALIDATION_FLAG=""; \
+	if [ -n "$(EXPECTED_COUNT)" ]; then \
+	  EXPECTED_VALIDATION_FLAG="--expected-resources=$(EXPECTED_COUNT)"; \
+	  echo "Expected resource count: $(EXPECTED_COUNT)"; \
+	fi; \
+	./scripts/pre-destroy-validator.sh \
+		--project=$(PROJECT_ID) \
+		--var-file=$(VAR_FILE) \
+		--terraform-dir=terraform/gcp-gitea \
+		$$EXPECTED_VALIDATION_FLAG
+	@DESTROY_EXPECTED_FLAG=""; \
+	if [ -n "$(EXPECTED_COUNT)" ]; then \
+	  DESTROY_EXPECTED_FLAG="--expected-count=$(EXPECTED_COUNT)"; \
+	fi; \
+	./scripts/gcp-destroy.sh \
+		-p $(PROJECT_ID) \
+		-e $(ENVIRONMENT) \
+		-V $(VAR_FILE) \
+		-k -b \
+		--confirm-project=$(PROJECT_ID) \
+		$$DESTROY_EXPECTED_FLAG
+	@echo "$(GREEN)Safe destruction complete$(NC)"
+
+safe-destroy: ## Safe destruction with all validations (requires ENVIRONMENT and VAR_FILE)
+	@$(MAKE) destroy-with-validation PROJECT_ID=$(PROJECT_ID) ENVIRONMENT=$(ENVIRONMENT) VAR_FILE=$(VAR_FILE) EXPECTED_COUNT=$(EXPECTED_COUNT)
+
+switch-environment: ## Switch environment safely (requires ENV=dev|staging|prod)
+	@echo "$(GREEN)Switching to environment: $(ENV)$(NC)"
+	@test -n "$(ENV)" || (echo "$(RED)ERROR: ENV is required. Use: make switch-environment ENV=dev$(NC)" && exit 1)
+	@test "$(ENV)" = "dev" -o "$(ENV)" = "staging" -o "$(ENV)" = "prod" || \
+		(echo "$(RED)ERROR: ENV must be dev, staging, or prod$(NC)" && exit 1)
+	@./scripts/environment-selector.sh -e $(ENV)
+	@echo "$(GREEN)Environment switched to: $(ENV)$(NC)"
+	@echo ""
+	@$(MAKE) show-environment
+
+switch-env: ## Legacy alias for switch-environment
+	@$(MAKE) switch-environment ENV=$(ENV)
+
+audit-log: ## Show recent environment operations
+	@echo "$(GREEN)Recent Environment Operations$(NC)"
+	@echo "=============================="
+	@echo ""
+	@test -f logs/environment-audit.log && ./scripts/audit-report.sh --last 20 || \
+		echo "$(YELLOW)No audit log found. Operations will be logged here.$(NC)"
+
+audit-stats: ## Show audit log statistics
+	@echo "$(GREEN)Audit Log Statistics$(NC)"
+	@echo "===================="
+	@echo ""
+	@test -f logs/environment-audit.log && ./scripts/audit-report.sh --stats || \
+		echo "$(YELLOW)No audit log found.$(NC)"
+
+safety-check: ## Run all safety validation checks
+	@echo "$(GREEN)Running comprehensive safety checks...$(NC)"
+	@echo ""
+	@$(MAKE) show-environment
+	@echo ""
+	@$(MAKE) verify-project
+	@echo ""
+	@echo "$(GREEN)Checking git hooks...$(NC)"
+	@test -x .git/hooks/pre-commit && echo "  ✓ pre-commit hook installed" || echo "  $(RED)✗ pre-commit hook missing$(NC)"
+	@test -x .git/hooks/pre-push && echo "  ✓ pre-push hook installed" || echo "  $(RED)✗ pre-push hook missing$(NC)"
+	@echo ""
+	@echo "$(GREEN)Checking documentation...$(NC)"
+	@test -f docs/SAFE_OPERATIONS_GUIDE.md && echo "  ✓ SAFE_OPERATIONS_GUIDE.md" || echo "  $(RED)✗ Missing safety guide$(NC)"
+	@test -f docs/ENVIRONMENT_MANAGEMENT.md && echo "  ✓ ENVIRONMENT_MANAGEMENT.md" || echo "  $(RED)✗ Missing environment guide$(NC)"
+	@test -f docs/SAFETY_TRAINING.md && echo "  ✓ SAFETY_TRAINING.md" || echo "  $(RED)✗ Missing training guide$(NC)"
+	@echo ""
+	@echo "$(GREEN)Checking environment files...$(NC)"
+	@test -f terraform/gcp-gitea/.env.dev && echo "  ✓ terraform/gcp-gitea/.env.dev" || echo "  $(YELLOW)⚠ terraform/gcp-gitea/.env.dev not found$(NC)"
+	@test -f terraform/gcp-gitea/.env.staging && echo "  ✓ terraform/gcp-gitea/.env.staging" || echo "  $(YELLOW)⚠ terraform/gcp-gitea/.env.staging not found$(NC)"
+	@test -f terraform/gcp-gitea/.env.prod && echo "  ✓ terraform/gcp-gitea/.env.prod" || echo "  $(YELLOW)⚠ terraform/gcp-gitea/.env.prod not found$(NC)"
+	@echo ""
+	@echo "$(GREEN)✅ Safety check complete$(NC)"
+
+pre-flight-check: ## Complete pre-flight checklist (requires PROJECT_ID, ENVIRONMENT, VAR_FILE)
+	@echo "$(BLUE)╔══════════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║                    PRE-FLIGHT CHECKLIST                          ║$(NC)"
+	@echo "$(BLUE)╚══════════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@test -n "$(PROJECT_ID)" || (echo "$(RED)ERROR: PROJECT_ID is required$(NC)" && exit 1)
+	@test -n "$(ENVIRONMENT)" || (echo "$(RED)ERROR: ENVIRONMENT is required$(NC)" && exit 1)
+	@test -n "$(VAR_FILE)" || (echo "$(RED)ERROR: VAR_FILE is required$(NC)" && exit 1)
+	@echo "Project:     $(PROJECT_ID)"
+	@echo "Environment: $(ENVIRONMENT)"
+	@echo "Var file:    $(VAR_FILE)"
+	@echo ""
+	@echo "$(YELLOW)Running pre-flight checks...$(NC)"
+	@echo ""
+	@echo "1. Verify gcloud project matches Makefile"
+	@$(MAKE) verify-project PROJECT_ID=$(PROJECT_ID)
+	@echo ""
+	@echo "2. Display current environment configuration"
+	@$(MAKE) show-environment ENVIRONMENT=$(ENVIRONMENT)
+	@echo ""
+	@echo "3. Run Terraform project validator (plan mode)"
+	@./scripts/terraform-project-validator.sh \
+		--operation=plan \
+		--project=$(PROJECT_ID) \
+		--terraform-dir=terraform/gcp-gitea \
+		--var-file=$(VAR_FILE)
+	@echo ""
+	@echo "$(GREEN)✅ Pre-flight checklist complete$(NC)"
+	@echo ""
+	@echo "$(CYAN)You are cleared for deployment!$(NC)"
+
+emergency-rollback: ## Emergency rollback procedures (interactive)
+	@echo "$(RED)╔══════════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(RED)║                    EMERGENCY ROLLBACK                            ║$(NC)"
+	@echo "$(RED)╚══════════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)This will guide you through emergency rollback procedures.$(NC)"
+	@echo ""
+	@echo "Available rollback options:"
+	@echo "  1. Restore from latest backup (if available)"
+	@echo "  2. View disaster recovery procedures"
+	@echo "  3. Check recent audit log for incident timeline"
+	@echo "  4. View state backup locations"
+	@echo ""
+	@read -p "Select option (1-4) or 'q' to quit: " option; \
+	case $$option in \
+		1) \
+			echo "$(GREEN)Locating latest backup...$(NC)"; \
+			test -x scripts/gcp-restore.sh && ./scripts/gcp-restore.sh || \
+				echo "$(RED)Restore script not found. See docs/GCP_DISASTER_RECOVERY.md$(NC)"; \
+			;; \
+		2) \
+			echo "$(GREEN)Opening disaster recovery guide...$(NC)"; \
+			test -f docs/GCP_DISASTER_RECOVERY.md && less docs/GCP_DISASTER_RECOVERY.md || \
+				echo "$(RED)Disaster recovery guide not found$(NC)"; \
+			;; \
+		3) \
+			echo "$(GREEN)Recent operations (last 50):$(NC)"; \
+			echo ""; \
+			test -f logs/environment-audit.log && ./scripts/audit-report.sh --last 50 || \
+				echo "$(YELLOW)No audit log found$(NC)"; \
+			;; \
+		4) \
+			echo "$(GREEN)State backup locations:$(NC)"; \
+			echo ""; \
+			echo "Local backups:"; \
+			ls -lh .evidence/pre-destroy/terraform-state-backup-*.json 2>/dev/null || echo "  No local backups found"; \
+			echo ""; \
+			echo "GCS backups:"; \
+			gsutil ls gs://$(PROJECT_ID)-gitea-tfstate-*/backups/ 2>/dev/null || echo "  No GCS backups found"; \
+			;; \
+		q) \
+			echo "$(YELLOW)Emergency rollback cancelled$(NC)"; \
+			;; \
+		*) \
+			echo "$(RED)Invalid option$(NC)"; \
+			;; \
+	esac
 
 # ===== SECURITY SCANNING =====
 

@@ -42,6 +42,10 @@ gcp-key.json
 secrets/
 .env
 .env.*
+!.env.dev
+!.env.staging
+!.env.prod
+!.env.example
 
 # Evidence Files (except examples)
 evidence/*.json

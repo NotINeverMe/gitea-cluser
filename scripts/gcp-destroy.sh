@@ -8,17 +8,19 @@
 #   -p PROJECT_ID    GCP Project ID (required)
 #   -e ENVIRONMENT   Environment: dev|staging|prod (required)
 #   -r REGION        GCP Region (default: us-central1)
+#   -V VAR_FILE      Terraform variable file (HIGHLY RECOMMENDED for safety)
 #   -k               Keep evidence bucket after destruction
 #   -b               Create final backup before destruction
 #   -f               Force destroy without confirmation
 #   -n               Dry run - show what would be destroyed
+#   -s               Skip safety validation (NOT RECOMMENDED)
 #   -v               Verbose output
 #   -h               Show this help message
 #
 # Examples:
-#   ./gcp-destroy.sh -p my-project -e dev                # Standard teardown
-#   ./gcp-destroy.sh -p my-project -e prod -k -b        # Keep evidence, backup first
-#   ./gcp-destroy.sh -p my-project -e staging -n        # Dry run
+#   ./gcp-destroy.sh -p my-project -e dev -V terraform.tfvars.dev          # Standard teardown with explicit var file
+#   ./gcp-destroy.sh -p my-project -e prod -V terraform.tfvars.prod -k -b  # Keep evidence, backup first
+#   ./gcp-destroy.sh -p my-project -e staging -V terraform.tfvars.staging -n  # Dry run
 #
 # Exit Codes:
 #   0 - Success
@@ -44,6 +46,7 @@ readonly LOG_DIR="${PROJECT_ROOT}/logs"
 readonly EVIDENCE_DIR="${TERRAFORM_DIR}/evidence"
 readonly TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 readonly LOG_FILE="${LOG_DIR}/destroy_${TIMESTAMP}.log"
+readonly AUDIT_LOG="${LOG_DIR}/environment-audit.log"
 
 # Color codes
 readonly RED='\033[0;31m'
@@ -58,11 +61,17 @@ ENVIRONMENT=""
 PROJECT_ID=""
 REGION="us-central1"
 ZONE=""
+VAR_FILE=""
 KEEP_EVIDENCE=false
 CREATE_BACKUP=false
 FORCE_DESTROY=false
 DRY_RUN=false
+SKIP_VALIDATION=false
 VERBOSE=false
+CONFIRM_PROJECT=""
+EXPECTED_COUNT_MIN=""
+EXPECTED_COUNT_MAX=""
+EXPECTED_COUNT_SET=false
 
 # Destruction state
 DESTROY_ID=""
@@ -111,50 +120,151 @@ log() {
     esac
 }
 
+# Log to audit log
+audit_log() {
+    local action="$1"
+    shift
+    local details="$*"
+    local timestamp
+    timestamp=$(date '+%Y-%m-%dT%H:%M:%S%z')
+
+    mkdir -p "$(dirname "${AUDIT_LOG}")"
+
+    printf '[%s] ACTION=%s USER=%s HOST=%s %s\n' \
+        "${timestamp}" \
+        "${action}" \
+        "${USER:-unknown}" \
+        "$(hostname)" \
+        "${details}" >> "${AUDIT_LOG}"
+}
+
 # Show usage
 show_help() {
-    grep "^#" "$0" | head -29 | tail -27 | sed 's/^# //' | sed 's/^#//'
+    grep "^#" "$0" | head -31 | tail -29 | sed 's/^# //' | sed 's/^#//'
 }
 
 # Parse arguments
 parse_args() {
-    while getopts "p:e:r:kbfnvh" opt; do
-        case ${opt} in
-            p)
-                PROJECT_ID="${OPTARG}"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--project)
+                PROJECT_ID="$2"
+                shift 2
                 ;;
-            e)
-                ENVIRONMENT="${OPTARG}"
+            -p*)
+                PROJECT_ID="${1#-p}"
+                shift
                 ;;
-            r)
-                REGION="${OPTARG}"
+            -e|--environment)
+                ENVIRONMENT="$2"
+                shift 2
                 ;;
-            k)
+            -e*)
+                ENVIRONMENT="${1#-e}"
+                shift
+                ;;
+            -r|--region)
+                REGION="$2"
+                shift 2
+                ;;
+            -r*)
+                REGION="${1#-r}"
+                shift
+                ;;
+            -V|--var-file)
+                VAR_FILE="$2"
+                shift 2
+                ;;
+            -V*)
+                VAR_FILE="${1#-V}"
+                shift
+                ;;
+            -k|--keep-evidence)
                 KEEP_EVIDENCE=true
+                shift
                 ;;
-            b)
+            -b|--backup)
                 CREATE_BACKUP=true
+                shift
                 ;;
-            f)
+            -f|--force)
                 FORCE_DESTROY=true
+                shift
                 ;;
-            n)
+            -n|--dry-run)
                 DRY_RUN=true
+                shift
                 ;;
-            v)
+            -s|--skip-validation)
+                SKIP_VALIDATION=true
+                log WARNING "Safety validation will be skipped - USE WITH EXTREME CAUTION"
+                shift
+                ;;
+            -v|--verbose)
                 VERBOSE=true
+                shift
                 ;;
-            h)
+            -h|--help)
                 show_help
                 exit 0
                 ;;
-            \?)
-                log ERROR "Invalid option: -${OPTARG}"
+            --confirm-project=*)
+                CONFIRM_PROJECT="${1#*=}"
+                shift
+                ;;
+            --confirm-project)
+                CONFIRM_PROJECT="$2"
+                shift 2
+                ;;
+            -C*)
+                CONFIRM_PROJECT="${1#-C}"
+                shift
+                ;;
+            --expected-count=*)
+                set_expected_count "${1#*=}"
+                shift
+                ;;
+            --expected-count)
+                set_expected_count "$2"
+                shift 2
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                log ERROR "Invalid option: $1"
                 show_help
                 exit 1
                 ;;
         esac
     done
+}
+
+set_expected_count() {
+    local value="$1"
+    if [[ -z "${value}" ]]; then
+        log ERROR "Expected count value cannot be empty"
+        exit 1
+    fi
+
+    if [[ "${value}" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+        EXPECTED_COUNT_MIN="${BASH_REMATCH[1]}"
+        EXPECTED_COUNT_MAX="${BASH_REMATCH[2]}"
+    elif [[ "${value}" =~ ^[0-9]+$ ]]; then
+        EXPECTED_COUNT_MIN="${value}"
+        EXPECTED_COUNT_MAX="${value}"
+    else
+        log ERROR "Invalid --expected-count value: ${value}. Use MIN-MAX or a single integer."
+        exit 1
+    fi
+
+    if (( EXPECTED_COUNT_MIN > EXPECTED_COUNT_MAX )); then
+        log ERROR "--expected-count min must be <= max (${EXPECTED_COUNT_MIN}-${EXPECTED_COUNT_MAX})"
+        exit 1
+    fi
+
+    EXPECTED_COUNT_SET=true
 }
 
 # Validate parameters
@@ -176,6 +286,33 @@ validate_params() {
         ((errors++))
     fi
 
+    if [[ -z "${VAR_FILE}" ]]; then
+        log ERROR "Variable file is required (-V or --var-file)"
+        ((errors++))
+    else
+        local var_file_path="${VAR_FILE}"
+        if [[ ! -f "${var_file_path}" ]]; then
+            local var_basename
+            var_basename=$(basename "${VAR_FILE}")
+            if [[ -f "${TERRAFORM_DIR}/${var_basename}" ]]; then
+                var_file_path="${TERRAFORM_DIR}/${var_basename}"
+            elif [[ -f "${var_basename}" ]]; then
+                var_file_path="${var_basename}"
+            else
+                log ERROR "Variable file not found: ${VAR_FILE}"
+                ((errors++))
+            fi
+        fi
+    fi
+
+    if [[ -z "${CONFIRM_PROJECT}" ]]; then
+        log ERROR "--confirm-project=PROJECT_ID is required"
+        ((errors++))
+    elif [[ "${CONFIRM_PROJECT}" != "${PROJECT_ID}" ]]; then
+        log ERROR "--confirm-project (${CONFIRM_PROJECT}) must match supplied project ID (${PROJECT_ID})"
+        ((errors++))
+    fi
+
     if [[ ${errors} -gt 0 ]]; then
         exit 1
     fi
@@ -193,6 +330,145 @@ init_directories() {
 
     log DEBUG "Initialized directories"
 }
+
+# Run safety validation checks
+run_safety_validation() {
+    if [[ "${SKIP_VALIDATION}" == "true" ]]; then
+        log WARNING "⚠️  SAFETY VALIDATION SKIPPED - Proceeding without validation"
+        log WARNING "⚠️  This significantly increases the risk of destroying the wrong project"
+        return 0
+    fi
+
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        log INFO "Dry run mode - skipping safety validation"
+        return 0
+    fi
+
+    print_color "${BLUE}" "
+╔══════════════════════════════════════════════════════════════════╗
+║                    SAFETY VALIDATION CHECKS                      ║
+╚══════════════════════════════════════════════════════════════════╝
+"
+
+    local validation_failed=false
+
+    # Phase 1: Project Validator
+    log INFO "Phase 1: Running terraform-project-validator.sh..."
+
+    local project_validator="${SCRIPT_DIR}/terraform-project-validator.sh"
+    if [[ ! -x "${project_validator}" ]]; then
+        log ERROR "Project validator script not found or not executable: ${project_validator}"
+        validation_failed=true
+    else
+        local validator_args=(
+            "--operation=destroy"
+            "--project=${PROJECT_ID}"
+            "--terraform-dir=${TERRAFORM_DIR}"
+        )
+
+        if [[ -n "${VAR_FILE}" ]]; then
+            validator_args+=("--var-file=${VAR_FILE}")
+        fi
+
+        if [[ "${FORCE_DESTROY}" == "true" ]]; then
+            validator_args+=("--non-interactive" "--confirm-destroy")
+        fi
+
+        if ${project_validator} "${validator_args[@]}" 2>&1 | tee -a "${LOG_FILE}"; then
+            log SUCCESS "Project validation passed"
+        else
+            log ERROR "Project validation FAILED"
+            validation_failed=true
+        fi
+    fi
+
+    echo ""
+
+    # Phase 2: Pre-Destroy Validator
+    log INFO "Phase 2: Running pre-destroy-validator.sh..."
+
+    local predestroy_validator="${SCRIPT_DIR}/pre-destroy-validator.sh"
+    if [[ ! -x "${predestroy_validator}" ]]; then
+        log ERROR "Pre-destroy validator script not found or not executable: ${predestroy_validator}"
+        validation_failed=true
+    else
+        local destroy_validator_args=(
+            "--project=${PROJECT_ID}"
+            "--terraform-dir=${TERRAFORM_DIR}"
+        )
+
+        if [[ -n "${VAR_FILE}" ]]; then
+            destroy_validator_args+=("--var-file=${VAR_FILE}")
+        fi
+
+        if [[ "${EXPECTED_COUNT_SET}" == "true" ]]; then
+            destroy_validator_args+=("--expected-resources=${EXPECTED_COUNT_MIN}-${EXPECTED_COUNT_MAX}")
+        elif [[ ${RESOURCES_DESTROYED} -gt 0 ]]; then
+            local min_resources=$((RESOURCES_DESTROYED - 20))
+            local max_resources=$((RESOURCES_DESTROYED + 20))
+            destroy_validator_args+=("--expected-resources=${min_resources}-${max_resources}")
+        fi
+
+        # Add non-interactive flag if force destroy is enabled
+        if [[ "${FORCE_DESTROY}" == "true" ]]; then
+            destroy_validator_args+=("--non-interactive" "--confirm-destroy")
+        fi
+
+        if ${predestroy_validator} "${destroy_validator_args[@]}" 2>&1 | tee -a "${LOG_FILE}"; then
+            log SUCCESS "Pre-destroy validation passed"
+        else
+            local exit_code=$?
+            if [[ ${exit_code} -eq 3 ]]; then
+                log WARNING "User cancelled operation during validation"
+                exit 3
+            else
+                log ERROR "Pre-destroy validation FAILED"
+                validation_failed=true
+            fi
+        fi
+    fi
+
+    echo ""
+
+    # Final validation result
+    if [[ "${validation_failed}" == "true" ]]; then
+        print_color "${RED}" "
+╔══════════════════════════════════════════════════════════════════╗
+║               ❌ SAFETY VALIDATION FAILED ❌                      ║
+╠══════════════════════════════════════════════════════════════════╣
+║ One or more safety checks failed. DO NOT PROCEED!                ║
+║                                                                   ║
+║ Review the validation errors above and:                          ║
+║   1. Verify you are targeting the correct project                ║
+║   2. Check your variable files                                   ║
+║   3. Ensure gcloud project context is correct                    ║
+║   4. Review terraform state                                      ║
+║                                                                   ║
+║ See: ${SAFE_OPERATIONS_GUIDE}║
+╚══════════════════════════════════════════════════════════════════╝
+"
+        log ERROR "Safety validation failed - destruction blocked"
+        exit 1
+    else
+        print_color "${GREEN}" "
+╔══════════════════════════════════════════════════════════════════╗
+║               ✅ SAFETY VALIDATION PASSED ✅                      ║
+╠══════════════════════════════════════════════════════════════════╣
+║ All safety checks passed. Safe to proceed with destruction.      ║
+║                                                                   ║
+║ Project verified:     ${PROJECT_ID}
+║ Terraform state:      Validated                                  ║
+║ Destroy plan:         Analyzed and approved                      ║
+╚══════════════════════════════════════════════════════════════════╝
+"
+        log SUCCESS "All safety validation checks passed"
+    fi
+
+    return 0
+}
+
+# Reference to safe operations guide
+readonly SAFE_OPERATIONS_GUIDE="${PROJECT_ROOT}/docs/SAFE_OPERATIONS_GUIDE.md"
 
 # Check current infrastructure
 check_infrastructure() {
@@ -331,6 +607,15 @@ confirm_destruction() {
         return 0
     fi
 
+    local expected_text="Not set"
+    if [[ "${EXPECTED_COUNT_SET}" == "true" ]]; then
+        if [[ "${EXPECTED_COUNT_MIN}" == "${EXPECTED_COUNT_MAX}" ]]; then
+            expected_text="${EXPECTED_COUNT_MIN}"
+        else
+            expected_text="${EXPECTED_COUNT_MIN}-${EXPECTED_COUNT_MAX}"
+        fi
+    fi
+
     print_color "${RED}" "
 ╔══════════════════════════════════════════════════════════════════╗
 ║                      ⚠⚠⚠ DANGER ZONE ⚠⚠⚠                        ║
@@ -340,6 +625,7 @@ confirm_destruction() {
 ║ Environment:      ${ENVIRONMENT}
 ║ Project:          ${PROJECT_ID}
 ║ Resources:        ${RESOURCES_DESTROYED} resources will be destroyed
+║ Expected Count:   ${expected_text}
 ║ Keep Evidence:    $(if [[ "${KEEP_EVIDENCE}" == "true" ]]; then echo "YES"; else echo "NO"; fi)
 ║ Final Backup:     $(if [[ "${CREATE_BACKUP}" == "true" ]]; then echo "YES"; else echo "NO"; fi)
 ╚══════════════════════════════════════════════════════════════════╝
@@ -361,11 +647,27 @@ service disruption and potential data loss.
         fi
     fi
 
-    read -p "Are you absolutely sure? Type 'destroy' to confirm: " -r
+    read -p "Type the project ID '${PROJECT_ID}' to confirm: " -r confirm_project
+    if [[ "${confirm_project}" != "${PROJECT_ID}" ]]; then
+        log WARNING "Project confirmation mismatch. Expected ${PROJECT_ID}, got ${confirm_project:-<empty>}"
+        exit 0
+    fi
 
-    if [[ "${REPLY}" != "destroy" ]]; then
+    read -p "Are you absolutely sure? Type 'destroy' to confirm: " -r confirm_word
+
+    if [[ "${confirm_word}" != "destroy" ]]; then
         log WARNING "Destruction cancelled by user"
         exit 0
+    fi
+
+    if [[ "${ENVIRONMENT}" == "prod" ]]; then
+        print_color "${YELLOW}" "
+Final abort window: you have 10 seconds to cancel (Ctrl+C to abort)."
+        for ((i=10; i>0; i--)); do
+            printf "\rContinuing in %2d seconds..." "${i}"
+            sleep 1
+        done
+        printf "\rContinuing now...           \n"
     fi
 }
 
@@ -394,8 +696,33 @@ terraform_destroy() {
         terraform state rm google_storage_bucket.evidence 2>/dev/null || true
     fi
 
+    # Build terraform destroy command with explicit var-file if specified
+    local destroy_cmd="terraform destroy -auto-approve"
+
+    if [[ -n "${VAR_FILE}" ]]; then
+        local destroy_var_file="${VAR_FILE}"
+        if [[ ! -f "${destroy_var_file}" ]]; then
+            local destroy_var_basename
+            destroy_var_basename=$(basename "${VAR_FILE}")
+            if [[ -f "${destroy_var_basename}" ]]; then
+                destroy_var_file="${destroy_var_basename}"
+            fi
+        fi
+
+        destroy_cmd="${destroy_cmd} -var-file=${destroy_var_file}"
+        log INFO "Using explicit variable file: ${destroy_var_file}"
+    else
+        log WARNING "No var-file specified - terraform will auto-load terraform.tfvars"
+    fi
+
+    if [[ -n "${extra_args}" ]]; then
+        destroy_cmd="${destroy_cmd} ${extra_args}"
+    fi
+
+    log INFO "Executing: ${destroy_cmd}"
+
     # Run destroy
-    if terraform destroy -auto-approve ${extra_args} 2>&1 | tee -a "${LOG_FILE}"; then
+    if ${destroy_cmd} 2>&1 | tee -a "${LOG_FILE}"; then
         log SUCCESS "Terraform destroy completed"
         DESTROY_STATUS="SUCCESS"
     else
@@ -598,8 +925,23 @@ main() {
         log WARNING "DRY RUN MODE - No actual destruction will occur"
     fi
 
+    local expected_count_field="expected_count=unset"
+    if [[ "${EXPECTED_COUNT_SET}" == "true" ]]; then
+        if [[ "${EXPECTED_COUNT_MIN}" == "${EXPECTED_COUNT_MAX}" ]]; then
+            expected_count_field="expected_count=${EXPECTED_COUNT_MIN}"
+        else
+            expected_count_field="expected_count=${EXPECTED_COUNT_MIN}-${EXPECTED_COUNT_MAX}"
+        fi
+    fi
+
+    # Audit log entry
+    audit_log "DESTROY" "status=START project=${PROJECT_ID} environment=${ENVIRONMENT} var_file=${VAR_FILE:-auto-loaded} dry_run=${DRY_RUN} ${expected_count_field}"
+
     # Check infrastructure
     check_infrastructure
+
+    # Run safety validation (integrated project and destroy plan validation)
+    run_safety_validation
 
     # Create final backup
     create_final_backup
@@ -607,7 +949,7 @@ main() {
     # Export evidence
     export_evidence
 
-    # Confirm destruction
+    # Confirm destruction (this is now a second layer of confirmation after validation)
     confirm_destruction
 
     # Destroy infrastructure
@@ -626,6 +968,9 @@ main() {
 
     # Generate report
     generate_report
+
+    # Audit log final status
+    audit_log "DESTROY" "status=${DESTROY_STATUS} project=${PROJECT_ID} environment=${ENVIRONMENT} resources=${RESOURCES_DESTROYED} var_file=${VAR_FILE:-auto-loaded} ${expected_count_field}"
 
     if [[ "${DESTROY_STATUS}" == "SUCCESS" ]]; then
         print_color "${GREEN}" "

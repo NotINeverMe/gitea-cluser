@@ -1,0 +1,34 @@
+# Terraform Variables for cui-gitea-prod Production Decommissioning
+# CMMC 2.0 Level 2 and NIST SP 800-171 Rev. 2 Compliant Configuration
+# Production Environment - DECOMMISSIONING TARGET
+#
+# IMPORTANT: This file is used ONLY for decommissioning cui-gitea-prod
+
+# ============================================================================
+# PROJECT & REGION CONFIGURATION
+# ============================================================================
+
+# GCP Project ID - PRODUCTION
+project_id = "cui-gitea-prod"
+
+# GCP Region for resource deployment
+region = "us-central1"
+
+# GCP Zone for Compute Engine instance
+zone = "us-central1-a"
+
+# Environment name
+environment = "prod"
+
+# ============================================================================
+# BOOTSTRAP RESOURCES
+# ============================================================================
+
+# Terraform state bucket name (from cui-gitea-prod deployment)
+terraform_state_bucket = "cui-gitea-prod-gitea-tfstate-f5f2e413"
+
+# KMS keyring name
+kms_keyring_name = "cui-gitea-prod-prod-keyring"
+
+# KMS keyring location
+kms_keyring_location = "us-central1"
